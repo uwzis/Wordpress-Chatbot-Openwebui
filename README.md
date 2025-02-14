@@ -1,2 +1,2 @@
-# Wordpress-Chastbot-Openwebui
-Open Source Wordpress chat bot plugin for wordpress. (UI in developmennt, Help wanted).
+# Wordpress-Chastbot-Openwebu
+Open Source Wordpress chat bot plugin for wordpress. Openwebui API is implmented, need help desiging the UI and other custom features are welcome. Any help would be appricated.
