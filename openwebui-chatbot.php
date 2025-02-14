@@ -108,9 +108,7 @@ final class Chatbot {
 		throw new \Exception( __( 'Cannot unserialize a singleton.', self::TEXT_DOMAIN ) );
 	}
 
-	/* ==========================================================================
-	   PLUGIN BOOTSTRAP & INITIALIZATION
-	========================================================================== */
+	/* ========================================================================== PLUGIN BOOTSTRAP & INITIALIZATION ========================================================================== */
 
 	/**
 	 * Define essential plugin constants.
@@ -1262,6 +1260,716 @@ final class Chatbot {
 	private function send_admin_notification( string $subject, string $message ): void {
 		$admin_email = apply_filters( 'ollama_chatbot_admin_email', get_option( 'admin_email' ) );
 		wp_mail( $admin_email, $subject, $message );
+	}
+
+	/* ========================================================================== SHORTCODE CALLBACK ========================================================================== */
+
+	/**
+	 * Render the chatbot shortcode.
+	 *
+	 * This method outputs the complete HTML, CSS, and JavaScript for the enhanced chat interface.
+	 *
+	 * @param array $atts Shortcode attributes.
+	 * @return string HTML output.
+	 */
+	public function render_shortcode( $atts = [] ): string {
+		// Merge default attributes with user-defined ones.
+		$atts = shortcode_atts(
+			[
+				'title' => 'Chatbot',
+			],
+			$atts,
+			'ollama_chatbot'
+		);
+
+		ob_start();
+		?>
+        <style>
+            :root {
+                --chat-bg: #f9f9f9;
+                --chat-border: #ddd;
+                --user-color: #0073aa;
+                --assistant-color: #444;
+                --error-color: #d63638;
+                --dark-bg: #1a1a1a;
+                --dark-text: #eee;
+                --btn-bg: #0073aa;
+                --btn-hover-bg: #005177;
+                --btn-text: #fff;
+                --highlight-color: #fffae6;
+                --shadow-color: rgba(0, 0, 0, 0.1);
+                --input-bg: #fff;
+                --input-border: #ddd;
+                --font-base: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            }
+
+            *, *::before, *::after {
+                box-sizing: border-box;
+            }
+
+            #ollama-chatbot-container {
+                font-family: var(--font-base);
+                line-height: 1.5;
+                padding: 1.5rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px var(--shadow-color);
+                max-width: 1200px;
+                margin: 0 auto;
+            }
+
+            #ollama-chatbot-container.light {
+                background: var(--chat-bg);
+                color: #333;
+            }
+
+            #ollama-chatbot-container.dark {
+                background: var(--dark-bg);
+                color: var(--dark-text);
+                --input-bg: #2d2d2d;
+                --input-border: #404040;
+                --chat-border: #404040;
+            }
+
+            #ollama-chat-log {
+                border: 1px solid var(--chat-border);
+                border-radius: 6px;
+                padding: 1rem;
+                max-height: 500px;
+                overflow-y: auto;
+                background: inherit;
+                color: inherit;
+                margin-bottom: 1rem;
+                scroll-behavior: smooth;
+            }
+
+            .ollama-chat-message {
+                margin-bottom: 1rem;
+                display: flex;
+                align-items: flex-start;
+                position: relative;
+                transition: all 0.3s ease;
+                padding: 0.75rem;
+                border-radius: 6px;
+            }
+
+            .ollama-chat-message.new {
+                background-color: var(--highlight-color);
+            }
+
+            .ollama-avatar {
+                width: 36px;
+                height: 36px;
+                border-radius: 50%;
+                margin-right: 1rem;
+                border: 2px solid var(--chat-border);
+            }
+
+            .ollama-message-content {
+                flex: 1;
+                line-height: 1.6;
+            }
+
+            .ollama-timestamp {
+                font-size: 0.8rem;
+                color: #777;
+                margin-right: 0.5rem;
+            }
+
+            .ollama-user .ollama-message-content {
+                color: var(--user-color);
+            }
+
+            .ollama-assistant .ollama-message-content {
+                color: var(--assistant-color);
+            }
+
+            .ollama-error .ollama-message-content {
+                color: var(--error-color);
+                background: rgba(214, 54, 56, 0.1);
+                padding: 0.75rem;
+                border-radius: 4px;
+            }
+
+            .ollama-edit,
+            .ollama-delete,
+            .ollama-reaction {
+                font-size: 0.9rem;
+                margin-left: 0.5rem;
+                cursor: pointer;
+                color: #666;
+                transition: color 0.2s ease;
+            }
+
+            .ollama-edit:hover,
+            .ollama-delete:hover,
+            .ollama-reaction:hover {
+                color: var(--btn-bg);
+            }
+
+            #ollama-chatbot-container button {
+                margin: 0.25rem;
+                padding: 0.5rem 1rem;
+                cursor: pointer;
+                background: var(--btn-bg);
+                color: var(--btn-text);
+                border: none;
+                border-radius: 4px;
+                font-size: 0.9rem;
+                transition: all 0.2s ease;
+            }
+
+            #ollama-chatbot-container button:hover {
+                background: var(--btn-hover-bg);
+                transform: translateY(-1px);
+            }
+
+            #ollama-chatbot-container button:active {
+                transform: translateY(0);
+            }
+
+            #ollama-chatbot-container button:focus {
+                outline: 2px solid var(--btn-bg);
+                outline-offset: 2px;
+            }
+
+            #ollama-emoji-picker {
+                display: none;
+                border: 1px solid var(--chat-border);
+                padding: 0.75rem;
+                background: var(--input-bg);
+                position: absolute;
+                z-index: 1000;
+                border-radius: 6px;
+                box-shadow: 0 2px 8px var(--shadow-color);
+            }
+
+            #ollama-emoji-picker span {
+                cursor: pointer;
+                padding: 0.25rem;
+                font-size: 1.2rem;
+                transition: transform 0.2s ease;
+                display: inline-block;
+            }
+
+            #ollama-emoji-picker span:hover {
+                transform: scale(1.2);
+            }
+
+            #ollama-search {
+                width: 100%;
+                max-width: 400px;
+                margin-bottom: 1rem;
+                padding: 0.75rem;
+                border: 1px solid var(--input-border);
+                border-radius: 4px;
+                background: var(--input-bg);
+                color: inherit;
+            }
+
+            #ollama-user-message {
+                width: 100%;
+                padding: 0.75rem;
+                border: 1px solid var(--input-border);
+                border-radius: 4px;
+                background: var(--input-bg);
+                color: inherit;
+                margin-bottom: 0.5rem;
+                resize: vertical;
+            }
+
+            #ollama-notification-banner {
+                display: none;
+                background: var(--highlight-color);
+                padding: 0.75rem;
+                border-radius: 4px;
+                margin-bottom: 1rem;
+                text-align: center;
+            }
+
+            @media (max-width: 768px) {
+                #ollama-chatbot-container {
+                    padding: 1rem;
+                }
+
+                #ollama-chat-log {
+                    max-height: 400px;
+                }
+
+                .ollama-avatar {
+                    width: 32px;
+                    height: 32px;
+                }
+
+                #ollama-chatbot-container button {
+                    width: 100%;
+                    margin: 0.25rem 0;
+                }
+            }
+        </style>
+
+        <div id="ollama-chatbot-container" class="light" role="region" aria-label="Chatbot Interface" style="font-family: sans-serif; padding: 10px;">
+			<?php if ( ! empty( $atts['title'] ) ) : ?>
+                <h2><?php echo esc_html( $atts['title'] ); ?></h2>
+			<?php endif; ?>
+
+            <!-- Controls -->
+            <div style="margin-bottom: 10px;">
+                <button type="button" id="ollama-toggle-dark" aria-label="Toggle Dark Mode">Toggle Dark Mode</button>
+                <button type="button" id="ollama-download-log" aria-label="Download Chat Log">Download Chat Log</button>
+                <button type="button" id="ollama-start-voice" aria-label="Start Voice Input">🎤 Voice Input</button>
+                <button type="button" id="ollama-reset-convo" aria-label="Reset Conversation">Reset Conversation</button>
+                <button type="button" id="ollama-scroll-bottom" aria-label="Scroll to Bottom">Scroll to Bottom</button>
+                <button type="button" id="ollama-emoji-btn" aria-label="Emoji Picker">😊 Emoji</button>
+                <button type="button" id="ollama-save-chat" aria-label="Save Chat">Save Chat</button>
+            </div>
+
+            <!-- Notification banner -->
+            <div id="ollama-notification-banner" aria-live="assertive">New message received!</div>
+
+            <!-- Search box for chat log -->
+            <input type="text" id="ollama-search" placeholder="Search messages..." aria-label="Search Chat Log">
+
+            <!-- Chat log container (ARIA live region for accessibility) -->
+            <div id="ollama-chat-log" aria-live="polite"></div>
+
+            <!-- Typing indicator -->
+            <div id="ollama-typing" style="display:none; font-style: italic;">Assistant is typing...</div>
+
+            <!-- Loading indicator -->
+            <div id="ollama-loading" style="display:none; text-align: center;">Loading...</div>
+
+            <!-- Chat form -->
+            <form id="ollama-chat-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" aria-label="Send Message">
+                <input type="hidden" name="action" value="ollama_handle_chat_request">
+                <input type="hidden" name="nonce" value="<?php echo esc_attr( wp_create_nonce( self::NONCE_ACTION ) ); ?>">
+                <!-- Use a textarea for multi-line input with auto-save draft -->
+                <textarea id="ollama-user-message" name="userMessage" placeholder="Type your message..." style="width: 70%; height: 60px;" aria-required="true"></textarea>
+                <button type="submit">Send</button>
+                <button type="button" id="ollama-clear-chat" aria-label="Clear Chat">Clear Chat</button>
+            </form>
+
+            <!-- Emoji picker panel -->
+            <div id="ollama-emoji-picker">
+				<?php
+				$emojis = ['😊', '😂', '👍', '❤️', '😢', '😮', '😡', '🙌', '🎉', '🤔'];
+				foreach ( $emojis as $emoji ) {
+					echo '<span class="ollama-emoji">' . $emoji . '</span> ';
+				}
+				?>
+            </div>
+
+            <!-- Optional audio element for notification sound -->
+            <audio id="ollama-notification-sound" style="display:none;">
+                <source src="<?php echo esc_url( plugins_url( 'notification.mp3', __FILE__ ) ); ?>" type="audio/mpeg">
+            </audio>
+
+            <script>
+                (function($) {
+                    $(document).ready(function() {
+                        // --- Feature: Auto-Save Draft ---
+                        function loadDraft() {
+                            var draft = localStorage.getItem('ollamaDraft');
+                            if (draft) {
+                                $('#ollama-user-message').val(draft);
+                            }
+                        }
+
+                        function saveDraft() {
+                            localStorage.setItem('ollamaDraft', $('#ollama-user-message').val());
+                        }
+
+                        $('#ollama-user-message').on('input', saveDraft);
+                        loadDraft();
+
+                        // --- Feature: Chat Log Search ---
+                        $('#ollama-search').on('keyup', function() {
+                            var term = $(this).val().toLowerCase();
+                            $('#ollama-chat-log .ollama-chat-message').each(function() {
+                                var text = $(this).text().toLowerCase();
+                                $(this).toggle(text.indexOf(term) > -1);
+                            });
+                        });
+
+                        // --- Feature: File Attachment Support ---
+                        var attachmentInput = $('<input type="file" accept="image/*" style="display:none;">');
+                        $('body').append(attachmentInput);
+                        $('<button type="button" id="ollama-attach" aria-label="Attach Image">Attach Image</button>')
+                            .insertAfter('#ollama-clear-chat')
+                            .on('click', function() {
+                                attachmentInput.click();
+                            });
+                        attachmentInput.on('change', function() {
+                            var file = this.files[0];
+                            if (file) {
+                                var reader = new FileReader();
+                                reader.onload = function(e) {
+                                    appendMessage(
+                                        '#ollama-chat-log',
+                                        '<div class="ollama-chat-message ollama-user">' +
+                                        '<img class="ollama-avatar" src="<?php echo esc_url( plugins_url( "user.png", __FILE__ ) ); ?>" alt="User Avatar">' +
+                                        '<div class="ollama-message-content">' +
+                                        '<span class="ollama-timestamp">' + getCurrentTimestamp() + '</span> ' +
+                                        '<strong>You:</strong> <img src="' + e.target.result + '" alt="Attachment" style="max-width:200px; display:block;">' +
+                                        '</div>' +
+                                        '</div>'
+                                    );
+                                };
+                                reader.readAsDataURL(file);
+                            }
+                        });
+
+                        // --- Feature: Language Selector for TTS/Voice ---
+                        var langSelector = $('<select id="ollama-lang" aria-label="Select Language"></select>');
+                        var languages = {
+                            'en-US': 'English (US)',
+                            'es-ES': 'Spanish',
+                            'fr-FR': 'French',
+                            'de-DE': 'German'
+                        };
+                        $.each(languages, function(code, label) {
+                            langSelector.append('<option value="' + code + '">' + label + '</option>');
+                        });
+                        langSelector.insertAfter('#ollama-start-voice');
+
+                        // --- Feature: Send Sound Effect ---
+                        function playSendSound() {
+                            if (window.AudioContext) {
+                                var ctx = new AudioContext();
+                                var oscillator = ctx.createOscillator();
+                                oscillator.type = 'sine';
+                                oscillator.frequency.setValueAtTime(440, ctx.currentTime);
+                                oscillator.connect(ctx.destination);
+                                oscillator.start();
+                                oscillator.stop(ctx.currentTime + 0.1);
+                            }
+                        }
+
+                        // --- Feature: Reaction System ---
+                        function addReactions($msg) {
+                            var reactions = $(
+                                '<div class="ollama-reactions">' +
+                                '<span class="ollama-reaction" data-reaction="👍">👍</span>' +
+                                '<span class="ollama-reaction" data-reaction="👎">👎</span>' +
+                                '</div>'
+                            );
+                            $msg.append(reactions);
+                        }
+
+                        $('#ollama-chat-log').on('click', '.ollama-reaction', function() {
+                            var reaction = $(this).data('reaction');
+                            $(this).closest('.ollama-chat-message').append('<span class="reaction-result">' + reaction + '</span>');
+                        });
+
+                        // --- Feature: Highlight New Message ---
+                        function highlightNewMessage($msg) {
+                            $msg.addClass('new');
+                            setTimeout(function() {
+                                $msg.removeClass('new');
+                            }, 2000);
+                        }
+
+                        // --- Feature: Keyboard Shortcuts ---
+                        $(document).on('keydown', function(e) {
+                            if (e.ctrlKey && e.key === 'd') {
+                                $('#ollama-toggle-dark').click();
+                            }
+                            if (e.ctrlKey && e.key === 'l') {
+                                $('#ollama-clear-chat').click();
+                            }
+                        });
+
+                        // --- Feature: Animated Scroll with Highlight ---
+                        function scrollToNew($msg) {
+                            scrollChatLog();
+                            highlightNewMessage($msg);
+                        }
+
+                        // Focus on textarea.
+                        $('#ollama-user-message').focus();
+
+                        // Helper function to get current timestamp.
+                        function getCurrentTimestamp() {
+                            var now = new Date();
+                            return now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+                        }
+
+                        // Function to smoothly scroll the chat log.
+                        function scrollChatLog() {
+                            var chatLog = $('#ollama-chat-log');
+                            chatLog.animate({ scrollTop: chatLog[0].scrollHeight }, 300);
+                        }
+
+                        // Function to append a message with fadeIn animation.
+                        function appendMessage(selector, messageHtml) {
+                            var message = $(messageHtml).hide();
+                            $(selector).append(message);
+                            message.fadeIn(400, function() {
+                                localStorage.setItem('ollamaChatLog', $('#ollama-chat-log').html());
+                            });
+                            scrollChatLog();
+                            highlightNewMessage(message);
+                        }
+
+                        // Function to auto-dismiss error messages after 5 seconds.
+                        function autoDismissErrors() {
+                            setTimeout(function() {
+                                $('.ollama-error').fadeOut(400, function() {
+                                    $(this).remove();
+                                });
+                            }, 5000);
+                        }
+
+                        // Store last user message for possible retry.
+                        var lastUserMessage = '';
+
+                        // Function to play notification sound.
+                        function playNotificationSound() {
+                            var sound = $('#ollama-notification-sound')[0];
+                            if (sound) {
+                                sound.play();
+                            }
+                        }
+
+                        // Function for TTS of assistant messages.
+                        function speakMessage(message) {
+                            if ('speechSynthesis' in window) {
+                                var utterance = new SpeechSynthesisUtterance(message);
+                                var selectedLang = $('#ollama-lang').val();
+                                utterance.lang = selectedLang;
+                                speechSynthesis.speak(utterance);
+                            }
+                        }
+
+                        // Toggle dark mode.
+                        $('#ollama-toggle-dark').on('click', function() {
+                            $('#ollama-chatbot-container').toggleClass('dark light');
+                        });
+
+                        // Download chat log as a text file.
+                        $('#ollama-download-log').on('click', function() {
+                            var chatContent = $('#ollama-chat-log').text();
+                            var blob = new Blob([chatContent], { type: 'text/plain;charset=utf-8' });
+                            var url = URL.createObjectURL(blob);
+                            var a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'chat-log-' + new Date().toISOString() + '.txt';
+                            a.click();
+                            URL.revokeObjectURL(url);
+                        });
+
+                        // Reset conversation: clear chat log and localStorage draft.
+                        $('#ollama-reset-convo').on('click', function() {
+                            if (confirm('Reset the conversation? This will clear the chat log and reset your conversation.')) {
+                                $('#ollama-chat-log').empty();
+                                localStorage.removeItem('ollamaChatLog');
+                                localStorage.removeItem('ollamaDraft');
+                            }
+                        });
+
+                        // Scroll to bottom button.
+                        $('#ollama-scroll-bottom').on('click', function() {
+                            scrollChatLog();
+                        });
+
+                        // Emoji picker toggle.
+                        $('#ollama-emoji-btn').on('click', function(e) {
+                            e.stopPropagation();
+                            $('#ollama-emoji-picker').toggle();
+                        });
+
+                        $('#ollama-emoji-picker').on('click', '.ollama-emoji', function() {
+                            var emoji = $(this).text();
+                            $('#ollama-user-message').val($('#ollama-user-message').val() + emoji).focus();
+                            $('#ollama-emoji-picker').hide();
+                        });
+
+                        $(document).on('click', function() {
+                            $('#ollama-emoji-picker').hide();
+                        });
+
+                        // Dummy Save Chat to Server.
+                        $('#ollama-save-chat').on('click', function() {
+                            var chatContent = $('#ollama-chat-log').html();
+                            $.post(
+                                ollamaChatbotVars.ajaxUrl,
+                                {
+                                    action: 'ollama_save_chat',
+                                    nonce: ollamaChatbotVars.nonce,
+                                    chatLog: chatContent
+                                },
+                                function(response) {
+                                    alert(response.success ? "Chat saved to server." : "Failed to save chat.");
+                                }
+                            );
+                        });
+
+                        // Voice input using Web Speech API.
+                        var recognizing = false;
+                        var recognition;
+                        if ('webkitSpeechRecognition' in window) {
+                            recognition = new webkitSpeechRecognition();
+                            recognition.continuous = false;
+                            recognition.interimResults = false;
+                            recognition.lang = 'en-US';
+                            recognition.onresult = function(event) {
+                                var transcript = event.results[0][0].transcript;
+                                $('#ollama-user-message').val(transcript);
+                                $('#ollama-chat-form').submit();
+                            };
+                            recognition.onerror = function(event) {
+                                console.log('Speech recognition error', event);
+                            };
+                            recognition.onend = function() {
+                                recognizing = false;
+                                $('#ollama-start-voice').text('🎤 Voice Input');
+                            };
+                        }
+
+                        $('#ollama-start-voice').on('click', function() {
+                            if (recognizing) {
+                                recognition.stop();
+                                return;
+                            }
+                            if (recognition) {
+                                recognizing = true;
+                                $('#ollama-start-voice').text('Stop Voice');
+                                recognition.start();
+                            } else {
+                                alert('Voice recognition not supported in this browser.');
+                            }
+                        });
+
+                        // Handle Enter/Shift+Enter in the textarea.
+                        $('#ollama-user-message').on('keydown', function(e) {
+                            if (e.keyCode === 13 && !e.shiftKey) {
+                                e.preventDefault();
+                                $('#ollama-chat-form').submit();
+                            }
+                        });
+
+                        // Function to render markdown (for assistant messages).
+                        function renderMarkdown(text) {
+                            if (typeof markdownit !== 'undefined') {
+                                var md = markdownit();
+                                return md.render(text);
+                            }
+                            return text;
+                        }
+
+                        // Handler for chat form submission.
+                        $('#ollama-chat-form').on('submit', function(e) {
+                            e.preventDefault();
+                            var userMessage = $('#ollama-user-message').val().trim();
+                            if (!userMessage) {
+                                return;
+                            }
+                            lastUserMessage = userMessage;
+                            playSendSound();
+
+                            // Append user's message with avatar and timestamp.
+                            appendMessage(
+                                '#ollama-chat-log',
+                                '<div class="ollama-chat-message ollama-user">' +
+                                '<img class="ollama-avatar" src="<?php echo esc_url( plugins_url( "user.png", __FILE__ ) ); ?>" alt="User Avatar">' +
+                                '<div class="ollama-message-content">' +
+                                '<span class="ollama-timestamp">' + getCurrentTimestamp() + '</span> ' +
+                                '<strong>You:</strong> ' + $('<div>').text(userMessage).html() +
+                                ' <span class="ollama-edit" title="Edit Message">✎</span>' +
+                                ' <span class="ollama-delete" title="Delete Message">×</span>' +
+                                ' <span class="ollama-reaction" title="React">👍</span>' +
+                                '</div>' +
+                                '</div>'
+                            );
+
+                            $('#ollama-user-message').val('').focus();
+                            $('#ollama-typing').show();
+                            $('#ollama-loading').show();
+
+                            $.post(
+                                ollamaChatbotVars.ajaxUrl,
+                                {
+                                    action: 'ollama_handle_chat_request',
+                                    nonce: ollamaChatbotVars.nonce,
+                                    userMessage: userMessage
+                                },
+                                function(response) {
+                                    $('#ollama-loading').hide();
+                                    $('#ollama-typing').hide();
+                                    if (response.success) {
+                                        var data = response.data;
+                                        appendMessage(
+                                            '#ollama-chat-log',
+                                            '<div class="ollama-chat-message ollama-assistant">' +
+                                            '<img class="ollama-avatar" src="<?php echo esc_url( plugins_url( "assistant.png", __FILE__ ) ); ?>" alt="Assistant Avatar">' +
+                                            '<div class="ollama-message-content">' +
+                                            '<span class="ollama-timestamp">' + getCurrentTimestamp() + '</span> ' +
+                                            '<strong>Assistant:</strong> ' + renderMarkdown(data.assistantMessage) +
+                                            '</div>' +
+                                            '</div>'
+                                        );
+                                        playNotificationSound();
+                                        speakMessage(data.assistantMessage);
+                                        $('#ollama-notification-banner').fadeIn(300).delay(2000).fadeOut(300);
+                                    } else {
+                                        var errorMsg = response.data.message || 'Error processing request.';
+                                        var errorHtml = '<div class="ollama-chat-message ollama-error">' +
+                                            '<div class="ollama-message-content">' +
+                                            '<span class="ollama-timestamp">' + getCurrentTimestamp() + '</span> ' +
+                                            '<strong>Error:</strong> ' + errorMsg +
+                                            ' <button type="button" class="ollama-retry">Retry</button>' +
+                                            '</div>' +
+                                            '</div>';
+                                        appendMessage('#ollama-chat-log', errorHtml);
+                                        autoDismissErrors();
+                                    }
+                                }
+                            );
+                        });
+
+                        // Delegate click event for retry button.
+                        $('#ollama-chat-log').on('click', '.ollama-retry', function() {
+                            $(this).closest('.ollama-error').remove();
+                            $('#ollama-user-message').val(lastUserMessage).focus();
+                            $('#ollama-chat-form').submit();
+                        });
+
+                        // Delegate click events for edit and delete icons on user messages.
+                        $('#ollama-chat-log').on('click', '.ollama-edit', function() {
+                            var $msgContent = $(this).closest('.ollama-message-content');
+                            var currentText = $msgContent.text().replace(/^You:\s*/, '');
+                            var newText = prompt("Edit your message:", currentText);
+                            if (newText !== null) {
+                                $msgContent.html(
+                                    '<span class="ollama-timestamp">' + getCurrentTimestamp() + '</span> ' +
+                                    '<strong>You:</strong> ' + $('<div>').text(newText).html() +
+                                    ' <span class="ollama-edit" title="Edit Message">✎</span>' +
+                                    ' <span class="ollama-delete" title="Delete Message">×</span>' +
+                                    ' <span class="ollama-reaction" title="React">👍</span>'
+                                );
+                                localStorage.setItem('ollamaChatLog', $('#ollama-chat-log').html());
+                            }
+                        });
+
+                        $('#ollama-chat-log').on('click', '.ollama-delete', function() {
+                            if (confirm("Delete this message?")) {
+                                $(this).closest('.ollama-chat-message').remove();
+                                localStorage.setItem('ollamaChatLog', $('#ollama-chat-log').html());
+                            }
+                        });
+
+                        // Handler for clear chat button.
+                        $('#ollama-clear-chat').on('click', function() {
+                            if (confirm('Are you sure you want to clear the chat log?')) {
+                                $('#ollama-chat-log').empty();
+                                localStorage.removeItem('ollamaChatLog');
+                            }
+                        });
+                    });
+                })(jQuery);
+            </script>
+        </div>
+		<?php
+		return ob_get_clean();
 	}
 }
 
