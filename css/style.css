@@ -1,0 +1,113 @@
+/* Container for the chatbot */
+#ollama-chatbot-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+}
+
+/* Toggle button */
+#ollama-chatbot-toggle {
+    padding: 14px 28px;
+    background-color: #3498db; /* Modern primary color */
+    color: white;
+    border: none;
+    border-radius: 50px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background-color 0.3s ease;
+}
+
+#ollama-chatbot-toggle:hover {
+    background-color: #005177; /* Hover effect */
+}
+
+/* Chat window */
+#ollama-chatbot-window {
+    width: 400px;
+    height: 600px;
+    background-color: #fff;
+    border: 2px solid #ddd;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+    display: none;
+    flex-direction: column;
+    border-radius: 16px;
+    overflow: hidden;
+}
+
+/* Responsive design */
+@media (max-width: 600px) {
+    #ollama-chatbot-window {
+        width: 95%;
+    }
+    
+    #ollama-chatbot-input, #ollama-chatbot-send {
+        width: calc(100% - 32px);
+    }
+}
+
+/* Input field */
+#ollama-chatbot-input {
+    padding: 12px;
+    margin: 8px 16px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    font-size: 14px;
+    width: calc(100% - 32px);
+}
+
+/* Send button */
+#ollama-chatbot-send {
+    width: calc(100% - 32px);
+    padding: 12px;
+    margin: 8px 16px 16px;
+    background-color: #3498db; /* Consistent primary color */
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s ease;
+}
+
+#ollama-chatbot-send:hover {
+    background-color: #005177; /* Hover effect consistency */
+}
+
+/* Conversation container */
+#ollama-chatbot-conversation {
+    height: calc(100% - 150px);
+    padding: 16px;
+    overflow-y: auto;
+    background-color: #f9f9f9;
+    border-bottom: 2px solid #ddd;
+}
+
+/* Markdown styling for chat responses */
+.ollama-chat-message strong {
+    font-weight: bold;
+}
+
+.ollama-chat-message em {
+    font-style: italic;
+}
+
+.ollama-chat-message p {
+    margin-bottom: 8px;
+}
+
+.ollama-chat-message ul, .ollama-chat-message ol {
+    padding-left: 20px;
+}
+
+.ollama-chat-message li {
+    margin-bottom: 4px;
+}
+
+.ollama-chat-message blockquote {
+    border-left: 4px solid #ddd;
+    padding-left: 16px;
+    margin-left: 0;
+    background-color: #f9f9f9;
+    border-radius: 4px;
+}
