@@ -1,188 +1,1046 @@
 <?php
 /**
  * Plugin Name: OpenWebUI Chatbot
- * Description: A simple chatbot plugin using OpenWebUI API with IP banning and Markdown formatting.
+ * Description: A comprehensive chatbot plugin using the OpenWebUI API with IP banning, nonce security, Markdown formatting, persistent conversation history, admin logs, exportable logs, API response caching, extended REST endpoints, Gutenberg block & widget integration, WP-CLI commands, fallback API endpoints, and admin error notifications.
  * Version: 1.0
  * Author: YTM Solutions
+ * Text Domain: ollama-chatbot
+ *
+ * @package Ollama_Chatbot
  */
-if (!defined('ABSPATH')) {
-    exit; // Exit if accessed directly
+
+declare(strict_types=1);
+
+namespace Ollama\Chatbot;
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit; // Exit if accessed directly.
 }
 
-// Define the plugin directory path and URL
-define('OLLAMA_CHATBOT_DIR', plugin_dir_path(__FILE__));
-define('OLLAMA_CHATBOT_URL', plugins_url('', __FILE__));
+final class Chatbot {
 
-// Log a message to confirm the plugin is loading
-error_log('Ollama Chatbot Plugin Loaded');
+	/** Plugin version */
+	private const VERSION = '1.0';
 
-// Enqueue scripts and styles
-function ollama_chatbot_enqueue_scripts() {
-    wp_enqueue_style('ollama-chatbot-style', OLLAMA_CHATBOT_URL . '/css/style.css');
-    wp_enqueue_script('axios', 'https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js', array(), null, true); // Include axios
-    wp_enqueue_script('markdown-it', 'https://cdn.jsdelivr.net/npm/markdown-it@12.3.2/dist/markdown-it.min.js', array(), null, true); // Include Markdown-It for parsing markdown
-    wp_enqueue_script('ollama-chatbot-script', OLLAMA_CHATBOT_URL . '/js/ollama-chatbot-script.js', array('jquery', 'axios', 'markdown-it'), null, true);
-    
-    // Localize script to pass variables to JavaScript
-    wp_localize_script('ollama-chatbot-script', 'ollamaChatbotVars', array(
-        'endpoint' => get_option('ollama_endpoint'),
-        'apiKey' => get_option('ollama_api_key'),
-        'model' => get_option('ollama_model'),
-        'prompt' => get_option('ollama_prompt') // Ensure this is correctly localized
-    ));
-}
-add_action('wp_enqueue_scripts', 'ollama_chatbot_enqueue_scripts');
+	/** Nonce action name */
+	private const NONCE_ACTION = 'ollama_chatbot_nonce';
 
-// Add settings link on plugin page
-function ollama_chatbot_settings_link($links) {
-    $settings_link = '<a href="options-general.php?page=ollama-chatbot-settings">Settings</a>';
-    array_push($links, $settings_link);
-    return $links;
-}
-$plugin = plugin_basename(__FILE__);
-add_filter("plugin_action_links_$plugin", 'ollama_chatbot_settings_link');
+	/** Default maximum allowed requests per IP per hour */
+	private const REQUEST_LIMIT = 100;
 
-// Register settings
-function ollama_chatbot_register_settings() {
-    register_setting('ollama-chatbot-settings-group', 'ollama_endpoint');
-    register_setting('ollama-chatbot-settings-group', 'ollama_api_key');
-    register_setting('ollama-chatbot-settings-group', 'ollama_model');
-    register_setting('ollama-chatbot-settings-group', 'ollama_prompt'); // Register prompt setting
-}
-add_action('admin_init', 'ollama_chatbot_register_settings');
+	/** Plugin text domain */
+	private const TEXT_DOMAIN = 'ollama-chatbot';
 
-// Create settings page
-function ollama_chatbot_settings_page() {
-    include OLLAMA_CHATBOT_DIR . '/includes/settings-page.php';
-}
-add_action('admin_menu', function() {
-    add_options_page(
-        'Ollama Chatbot Settings',
-        'Ollama Chatbot',
-        'manage_options',
-        'ollama-chatbot-settings',
-        'ollama_chatbot_settings_page'
-    );
-});
+	/** Conversation history expiration (in seconds) for transients */
+	private const HISTORY_EXPIRATION = DAY_IN_SECONDS;
 
-// Shortcode
-function ollama_chatbot_shortcode() {
-    error_log('Shortcode rendered');
-    return '<div id="ollama-chatbot-container">
-                <button id="ollama-chatbot-toggle">Chat with us!</button>
-                <div id="ollama-chatbot-window" style="display:none;">
-                    <div id="ollama-chatbot-conversation"></div>
-                    <textarea id="ollama-chatbot-input" placeholder="Type your message here..."></textarea>
-                    <button id="ollama-chatbot-send">Send</button>
-                </div>
-            </div>';
-}
-add_shortcode('ollama_chatbot', 'ollama_chatbot_shortcode');
+	/** Conversation log retention (in days) for persistent DB logs */
+	private const LOG_RETENTION_DAYS = 30;
 
-// Handle the chat request
-function ollama_handle_chat_request() {
-    $ip = $_SERVER['REMOTE_ADDR'];
-    
-    // Check if IP is banned
-    $banned_ips = get_option('ollama_banned_ips', []);
-    if (in_array($ip, $banned_ips)) {
-        echo json_encode(['status' => 'error', 'message' => '<p>Your IP has been temporarily blocked due to excessive requests.</p>']);
-        wp_die();
-    }
-    
-    // Track request count
-    $request_count = get_transient('ollama_request_count_' . $ip);
-    if (!$request_count) {
-        $request_count = 1;
-    } else {
-        $request_count++;
-    }
-    
-    set_transient('ollama_request_count_' . $ip, $request_count, HOUR_IN_SECONDS);
-    
-    // Ban IP after 100 requests
-    if ($request_count >= 100) {
-        $banned_ips[] = $ip;
-        update_option('ollama_banned_ips', $banned_ips);
-        echo json_encode(['status' => 'error', 'message' => '<p>Your IP has been temporarily blocked due to excessive requests.</p>']);
-        wp_die();
-    }
-    
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $userMessage = isset($_POST['userMessage']) ? sanitize_text_field($_POST['userMessage']) : '';
-        
-        if (!empty($userMessage)) {
-            $prompt = get_option('ollama_prompt');
-            
-            if (!$prompt) {
-                echo json_encode(['status' => 'error', 'message' => '<p>Prompt is not set.</p>']);
-                wp_die();
-            }
-            
-            $data = [
-                'model' => get_option('ollama_model'),
-                'messages' => [
-                    ['role' => 'system', 'content' => $prompt],
-                    ['role' => 'user', 'content' => $userMessage]
-                ]
-            ];
-            
-            $response = wp_remote_post(get_option('ollama_endpoint'), [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . get_option('ollama_api_key'),
-                    'Content-Type' => 'application/json'
-                ],
-                'body' => json_encode($data)
-            ]);
-            
-            if (is_wp_error($response)) {
-                echo json_encode(['status' => 'error', 'message' => '<p>Error calling OpenWebUI API.</p>']);
-                wp_die();
-            }
-            
-            $response_body = wp_remote_retrieve_body($response);
-            $response_data = json_decode($response_body, true);
-            
-            if (isset($response_data['choices'][0]['message']['content'])) {
-                $assistantMessage = $response_data['choices'][0]['message']['content'];
-                
-                // Format messages with markup
-                $formattedUserMessage = '<div class="ollama-chat-message ollama-user"><strong>You:</strong> ' . esc_html($userMessage) . '</div>';
-                $formattedAssistantMessage = '<div class="ollama-chat-message ollama-assistant"><strong>Assistant:</strong> ' . wp_kses_post($assistantMessage) . '</div>';
-                
-                echo json_encode(['status' => 'success', 'userMessage' => $formattedUserMessage, 'assistantMessage' => $formattedAssistantMessage]);
-            } else {
-                echo json_encode(['status' => 'error', 'message' => '<p>Unexpected response from OpenWebUI API.</p>']);
-            }
-        } else {
-            echo json_encode(['status' => 'error', 'message' => '<p>User message is empty.</p>']);
-        }
-    } else {
-        echo json_encode(['status' => 'error', 'message' => '<p>Invalid request method.</p>']);
-    }
-    
-    wp_die();
-}
-add_action('admin_post_ollama_handle_chat_request', 'ollama_handle_chat_request');
-add_action('admin_post_nopriv_ollama_handle_chat_request', 'ollama_handle_chat_request');
+	/**
+	 * Enable API response caching. Override via filter.
+	 *
+	 * @var bool
+	 */
+	private static bool $cache_enabled = true;
 
-// Function to clear banned IPs after an hour
-function ollama_clear_banned_ips() {
-    $banned_ips = get_option('ollama_banned_ips', []);
-    if (!empty($banned_ips)) {
-        update_option('ollama_banned_ips', []);
-    }
-}
-add_action('hourly_event', 'ollama_clear_banned_ips');
-if (!wp_next_scheduled('hourly_event')) {
-    wp_schedule_event(time(), 'hourly', 'hourly_event');
+	/**
+	 * Cache expiration (in seconds) for API responses.
+	 *
+	 * @var int
+	 */
+	private static int $cache_expiration = 300; // 5 minutes
+
+	/**
+	 * Singleton instance.
+	 *
+	 * @var Chatbot|null
+	 */
+	private static ?Chatbot $instance = null;
+
+	/**
+	 * Retrieve the singleton instance.
+	 *
+	 * @return Chatbot
+	 */
+	public static function get_instance(): self {
+		if ( null === self::$instance ) {
+			self::$instance = new self();
+		}
+		return self::$instance;
+	}
+
+	/**
+	 * Private constructor.
+	 */
+	private function __construct() {
+		$this->define_constants();
+		$this->init_hooks();
+		$this->load_textdomain();
+		$this->register_wp_cli_commands();
+		$this->register_gutenberg_block();
+		$this->register_widget();
+	}
+
+	/**
+	 * Prevent cloning.
+	 */
+	private function __clone() {}
+
+	/**
+	 * Prevent unserializing.
+	 */
+	public function __wakeup() {
+		throw new \Exception( 'Cannot unserialize a singleton.' );
+	}
+
+	/* ==========================================================================
+	   PLUGIN BOOTSTRAP & INITIALIZATION
+	========================================================================== */
+
+	/**
+	 * Define essential plugin constants.
+	 */
+	private function define_constants(): void {
+		if ( ! defined( 'OLLAMA_CHATBOT_DIR' ) ) {
+			define( 'OLLAMA_CHATBOT_DIR', plugin_dir_path( __FILE__ ) );
+		}
+		if ( ! defined( 'OLLAMA_CHATBOT_URL' ) ) {
+			define( 'OLLAMA_CHATBOT_URL', plugins_url( '', __FILE__ ) );
+		}
+		if ( ! defined( 'OLLAMA_CHATBOT_VERSION' ) ) {
+			define( 'OLLAMA_CHATBOT_VERSION', self::VERSION );
+		}
+	}
+
+	/**
+	 * Initialize hooks, actions, and filters.
+	 */
+	private function init_hooks(): void {
+		$this->debug_log( 'Chatbot Plugin Loaded' );
+
+		// Enqueue front-end assets.
+		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
+
+		// Admin settings and logs.
+		add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), [ $this, 'add_settings_link' ] );
+		add_action( 'admin_init', [ $this, 'register_settings' ] );
+		add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
+		add_action( 'admin_menu', [ $this, 'add_logs_page' ] );
+		add_action( 'admin_menu', [ $this, 'add_export_logs_page' ] );
+
+		// Chatbot UI shortcode.
+		add_shortcode( 'ollama_chatbot', [ $this, 'render_shortcode' ] );
+
+		// Legacy AJAX/POST handler.
+		add_action( 'admin_post_ollama_handle_chat_request', [ $this, 'handle_chat_request' ] );
+		add_action( 'admin_post_nopriv_ollama_handle_chat_request', [ $this, 'handle_chat_request' ] );
+
+		// REST API endpoints.
+		add_action( 'rest_api_init', [ $this, 'register_rest_routes' ] );
+		add_action( 'rest_api_init', [ $this, 'register_rest_log_routes' ] );
+
+		// Scheduled events.
+		add_action( 'ollama_hourly_event', [ $this, 'clear_banned_ips' ] );
+		if ( ! wp_next_scheduled( 'ollama_cleanup_conversation_logs' ) ) {
+			wp_schedule_event( time(), 'daily', 'ollama_cleanup_conversation_logs' );
+		}
+		add_action( 'ollama_cleanup_conversation_logs', [ $this, 'cleanup_conversation_logs' ] );
+
+		// Additional initialization.
+		do_action( 'ollama_chatbot_init' );
+
+		// Create conversation logs table on activation.
+		register_activation_hook( __FILE__, [ __CLASS__, 'create_conversation_table' ] );
+	}
+
+	/**
+	 * Load plugin textdomain.
+	 */
+	public function load_textdomain(): void {
+		load_plugin_textdomain(
+			self::TEXT_DOMAIN,
+			false,
+			dirname( plugin_basename( __FILE__ ) ) . '/languages/'
+		);
+	}
+
+	/* ==========================================================================
+	   ADMIN & FRONT-END FUNCTIONALITY
+	========================================================================== */
+
+	/**
+	 * Enqueue front-end styles and scripts.
+	 */
+	public function enqueue_scripts(): void {
+		wp_enqueue_style(
+			'ollama-chatbot-style',
+			OLLAMA_CHATBOT_URL . '/css/style.css',
+			[],
+			self::VERSION
+		);
+		wp_enqueue_script(
+			'axios',
+			'https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js',
+			[],
+			null,
+			true
+		);
+		wp_enqueue_script(
+			'markdown-it',
+			'https://cdn.jsdelivr.net/npm/markdown-it@12.3.2/dist/markdown-it.min.js',
+			[],
+			null,
+			true
+		);
+		wp_enqueue_script(
+			'ollama-chatbot-script',
+			OLLAMA_CHATBOT_URL . '/js/ollama-chatbot-script.js',
+			[ 'jquery', 'axios', 'markdown-it' ],
+			self::VERSION,
+			true
+		);
+		wp_localize_script(
+			'ollama-chatbot-script',
+			'ollamaChatbotVars',
+			[
+				'endpoint' => get_option( 'ollama_endpoint' ),
+				'apiKey'   => get_option( 'ollama_api_key' ),
+				'model'    => get_option( 'ollama_model' ),
+				'prompt'   => get_option( 'ollama_prompt' ),
+				'ajaxUrl'  => admin_url( 'admin-post.php' ),
+				'restUrl'  => esc_url_raw( rest_url( 'ollama-chatbot/v1/chat' ) ),
+				'nonce'    => wp_create_nonce( self::NONCE_ACTION ),
+			]
+		);
+	}
+
+	/**
+	 * Add a settings link to the plugins list.
+	 */
+	public function add_settings_link( array $links ): array {
+		$settings_link = sprintf(
+			'<a href="%s">%s</a>',
+			esc_url( admin_url( 'options-general.php?page=ollama-chatbot-settings' ) ),
+			esc_html__( 'Settings', self::TEXT_DOMAIN )
+		);
+		$links[] = $settings_link;
+		return $links;
+	}
+
+	/**
+	 * Register plugin settings.
+	 */
+	public function register_settings(): void {
+		$group = 'ollama-chatbot-settings-group';
+		register_setting( $group, 'ollama_endpoint' );
+		register_setting( $group, 'ollama_api_key' );
+		register_setting( $group, 'ollama_model' );
+		register_setting( $group, 'ollama_prompt' );
+		register_setting( $group, 'ollama_log_retention_days' );
+	}
+
+	/**
+	 * Add the settings page to the admin menu.
+	 */
+	public function add_settings_page(): void {
+		add_options_page(
+			esc_html__( 'Ollama Chatbot Settings', self::TEXT_DOMAIN ),
+			esc_html__( 'Ollama Chatbot', self::TEXT_DOMAIN ),
+			'manage_options',
+			'ollama-chatbot-settings',
+			[ $this, 'render_settings_page' ]
+		);
+	}
+
+	/**
+	 * Render the settings page.
+	 */
+	public function render_settings_page(): void {
+		include OLLAMA_CHATBOT_DIR . '/includes/settings-page.php';
+	}
+
+	/**
+	 * Add a new admin menu for conversation logs.
+	 */
+	public function add_logs_page(): void {
+		add_menu_page(
+			esc_html__( 'Chatbot Logs', self::TEXT_DOMAIN ),
+			esc_html__( 'Chatbot Logs', self::TEXT_DOMAIN ),
+			'manage_options',
+			'ollama-chatbot-logs',
+			[ $this, 'render_logs_page' ],
+			'dashicons-format-chat',
+			85
+		);
+	}
+
+	/**
+	 * Render the conversation logs admin page with search, pagination, and delete options.
+	 */
+	public function render_logs_page(): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$search = isset( $_GET['s'] ) ? sanitize_text_field( $_GET['s'] ) : '';
+		$page   = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
+		$per_page = 20;
+		$offset = ( $page - 1 ) * $per_page;
+		$where = $search ? $wpdb->prepare( "WHERE conversation_id LIKE %s", '%' . $wpdb->esc_like( $search ) . '%' ) : '';
+		$total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_name} $where" );
+		$logs = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_name} $where ORDER BY created_at DESC LIMIT %d OFFSET %d", $per_page, $offset ), ARRAY_A );
+		$total_pages = ceil( $total / $per_page );
+		?>
+		<div class="wrap">
+			<h1><?php esc_html_e( 'Chatbot Conversation Logs', self::TEXT_DOMAIN ); ?></h1>
+			<form method="get">
+				<input type="hidden" name="page" value="ollama-chatbot-logs" />
+				<p class="search-box">
+					<label class="screen-reader-text" for="log-search-input"><?php esc_html_e( 'Search Logs', self::TEXT_DOMAIN ); ?></label>
+					<input type="search" id="log-search-input" name="s" value="<?php echo esc_attr( $search ); ?>" />
+					<input type="submit" value="<?php esc_attr_e( 'Search Logs', self::TEXT_DOMAIN ); ?>" class="button" />
+				</p>
+			</form>
+			<table class="wp-list-table widefat fixed striped">
+				<thead>
+					<tr>
+						<th><?php esc_html_e( 'Conversation ID', self::TEXT_DOMAIN ); ?></th>
+						<th><?php esc_html_e( 'User ID', self::TEXT_DOMAIN ); ?></th>
+						<th><?php esc_html_e( 'User IP', self::TEXT_DOMAIN ); ?></th>
+						<th><?php esc_html_e( 'Log Data', self::TEXT_DOMAIN ); ?></th>
+						<th><?php esc_html_e( 'Date', self::TEXT_DOMAIN ); ?></th>
+						<th><?php esc_html_e( 'Actions', self::TEXT_DOMAIN ); ?></th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php if ( $logs ) : ?>
+						<?php foreach ( $logs as $log ) : ?>
+							<tr>
+								<td><?php echo esc_html( $log['conversation_id'] ); ?></td>
+								<td><?php echo esc_html( $log['user_id'] ?: 'Guest' ); ?></td>
+								<td><?php echo esc_html( $log['user_ip'] ); ?></td>
+								<td><pre><?php echo esc_html( $log['chat_history'] ); ?></pre></td>
+								<td><?php echo esc_html( $log['created_at'] ); ?></td>
+								<td>
+									<a href="<?php echo esc_url( add_query_arg( [ 'action' => 'delete_log', 'id' => $log['conversation_id'] ], admin_url( 'admin-post.php' ) ) ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log?', self::TEXT_DOMAIN ); ?>');"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></a>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					<?php else : ?>
+						<tr>
+							<td colspan="6"><?php esc_html_e( 'No logs found.', self::TEXT_DOMAIN ); ?></td>
+						</tr>
+					<?php endif; ?>
+				</tbody>
+			</table>
+			<?php
+			echo '<div class="tablenav"><div class="tablenav-pages">';
+			echo paginate_links( [
+				'base'      => add_query_arg( 'paged', '%#%' ),
+				'format'    => '',
+				'total'     => $total_pages,
+				'current'   => $page,
+			] );
+			echo '</div></div>';
+			?>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Add an admin submenu page for exporting logs as CSV.
+	 */
+	public function add_export_logs_page(): void {
+		add_submenu_page(
+			'ollama-chatbot-logs',
+			esc_html__( 'Export Logs', self::TEXT_DOMAIN ),
+			esc_html__( 'Export Logs', self::TEXT_DOMAIN ),
+			'manage_options',
+			'ollama-chatbot-export-logs',
+			[ $this, 'export_logs_page' ]
+		);
+	}
+
+	/**
+	 * Render the export logs page and handle CSV export.
+	 */
+	public function export_logs_page(): void {
+		if ( isset( $_POST['export_logs'] ) && check_admin_referer( 'export_chatbot_logs', 'export_nonce' ) ) {
+			$this->export_logs_as_csv();
+		}
+		?>
+		<div class="wrap">
+			<h1><?php esc_html_e( 'Export Chatbot Logs', self::TEXT_DOMAIN ); ?></h1>
+			<form method="post">
+				<?php wp_nonce_field( 'export_chatbot_logs', 'export_nonce' ); ?>
+				<p><?php esc_html_e( 'Click the button below to export all conversation logs as a CSV file.', self::TEXT_DOMAIN ); ?></p>
+				<input type="submit" name="export_logs" class="button button-primary" value="<?php esc_attr_e( 'Export Logs', self::TEXT_DOMAIN ); ?>">
+			</form>
+		</div>
+		<?php
+		exit;
+	}
+
+	/**
+	 * Export conversation logs as a CSV file.
+	 */
+	private function export_logs_as_csv(): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$logs = $wpdb->get_results( "SELECT * FROM {$table_name} ORDER BY created_at DESC", ARRAY_A );
+		header( 'Content-Type: text/csv; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename=chatbot_logs.csv' );
+		$output = fopen( 'php://output', 'w' );
+		fputcsv( $output, [ 'Conversation ID', 'User ID', 'User IP', 'Chat History', 'Created At' ] );
+		foreach ( $logs as $log ) {
+			fputcsv( $output, [
+				$log['conversation_id'],
+				$log['user_id'] ?: 'Guest',
+				$log['user_ip'],
+				$log['chat_history'],
+				$log['created_at'],
+			] );
+		}
+		fclose( $output );
+		exit;
+	}
+
+	/* ==========================================================================
+	   CONVERSATION HISTORY FUNCTIONS
+	========================================================================== */
+
+	/**
+	 * Retrieve the conversation ID.
+	 *
+	 * Checks POST, then cookie; if absent, generates a new ID.
+	 *
+	 * @return string Conversation ID.
+	 */
+	private function get_conversation_id(): string {
+		$conversation_id = $this->get_post_param( 'conversation_id' );
+		if ( ! empty( $conversation_id ) ) {
+			return $conversation_id;
+		}
+		if ( ! empty( $_COOKIE['ollama_chat_id'] ) ) {
+			return sanitize_text_field( wp_unslash( $_COOKIE['ollama_chat_id'] ) );
+		}
+		$conversation_id = uniqid( 'ollama_', true );
+		setcookie( 'ollama_chat_id', $conversation_id, time() + DAY_IN_SECONDS, COOKIEPATH, COOKIE_DOMAIN );
+		return $conversation_id;
+	}
+
+	/**
+	 * Get conversation history.
+	 *
+	 * @param string $conversation_id Conversation ID.
+	 * @return array Conversation history.
+	 */
+	private function get_conversation_history( string $conversation_id ): array {
+		$key = 'ollama_conversation_history_' . $conversation_id;
+		$history = get_transient( $key );
+		return is_array( $history ) ? $history : [];
+	}
+
+	/**
+	 * Update conversation history.
+	 *
+	 * @param string $conversation_id Conversation ID.
+	 * @param array  $history         History array.
+	 */
+	private function update_conversation_history( string $conversation_id, array $history ): void {
+		$key = 'ollama_conversation_history_' . $conversation_id;
+		set_transient( $key, $history, apply_filters( 'ollama_chatbot_history_expiration', self::HISTORY_EXPIRATION ) );
+		$this->log_conversation( $conversation_id, $history );
+	}
+
+	/**
+	 * Clear conversation history.
+	 *
+	 * @param string $conversation_id Conversation ID.
+	 */
+	private function clear_conversation_history( string $conversation_id ): void {
+		delete_transient( 'ollama_conversation_history_' . $conversation_id );
+		$this->delete_conversation_log( $conversation_id );
+	}
+
+	/**
+	 * Log conversation in the custom DB table.
+	 *
+	 * @param string $conversation_id Conversation ID.
+	 * @param array  $history         History array.
+	 */
+	private function log_conversation( string $conversation_id, array $history ): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$user_id = get_current_user_id();
+		$data = [
+			'conversation_id' => $conversation_id,
+			'user_id'         => $user_id,
+			'user_ip'         => $this->get_client_ip(),
+			'chat_history'    => maybe_serialize( $history ),
+			'created_at'      => current_time( 'mysql' ),
+		];
+		$wpdb->replace( $table_name, $data );
+	}
+
+	/**
+	 * Delete a conversation log.
+	 *
+	 * @param string $conversation_id Conversation ID.
+	 */
+	private function delete_conversation_log( string $conversation_id ): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$wpdb->delete( $table_name, [ 'conversation_id' => $conversation_id ] );
+	}
+
+	/* ==========================================================================
+	   CHAT REQUEST HANDLING
+	========================================================================== */
+
+	/**
+	 * Validate admin-post requests.
+	 */
+	private function validate_admin_request(): void {
+		if ( 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
+			$this->send_json_response( [ 'message' => __( 'Invalid request method.', self::TEXT_DOMAIN ) ], 405 );
+		}
+		$nonce = $_REQUEST['nonce'] ?? '';
+		$nonce = sanitize_text_field( wp_unslash( $nonce ) );
+		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE_ACTION ) ) {
+			$this->send_json_response( [ 'message' => __( 'Nonce verification failed.', self::TEXT_DOMAIN ) ], 403 );
+		}
+	}
+
+	/**
+	 * Fetch and sanitize a POST parameter.
+	 *
+	 * @param string $key Parameter key.
+	 * @return string Sanitized value.
+	 */
+	private function get_post_param( string $key ): string {
+		return isset( $_POST[ $key ] ) ? sanitize_textarea_field( wp_unslash( $_POST[ $key ] ) ) : '';
+	}
+
+	/**
+	 * Get the client IP.
+	 *
+	 * @return string Client IP.
+	 */
+	private function get_client_ip(): string {
+		$ip_keys = [ 'HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' ];
+		foreach ( $ip_keys as $key ) {
+			if ( ! empty( $_SERVER[ $key ] ) ) {
+				$ips = array_map( 'trim', explode( ',', sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) ) ) );
+				foreach ( $ips as $ip ) {
+					if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) {
+						return $ip;
+					}
+				}
+			}
+		}
+		return 'unknown';
+	}
+
+	/**
+	 * Check if an IP is banned.
+	 *
+	 * @param string $ip Client IP.
+	 * @return bool True if banned.
+	 */
+	private function is_ip_banned( string $ip ): bool {
+		$banned_ips = (array) get_option( 'ollama_banned_ips', [] );
+		return apply_filters( 'ollama_chatbot_is_ip_banned', in_array( $ip, $banned_ips, true ), $ip );
+	}
+
+	/**
+	 * Retrieve request limit.
+	 *
+	 * @return int Limit.
+	 */
+	private function get_request_limit(): int {
+		return (int) apply_filters( 'ollama_chatbot_request_limit', self::REQUEST_LIMIT );
+	}
+
+	/**
+	 * Increment request count and enforce rate limiting.
+	 *
+	 * @param string $ip Client IP.
+	 * @return array Error if limit exceeded.
+	 */
+	private function check_rate_limit( string $ip ): array {
+		$transient_key = 'ollama_request_count_' . $ip;
+		$request_count = (int) get_transient( $transient_key );
+		$request_count++;
+		set_transient( $transient_key, $request_count, HOUR_IN_SECONDS );
+		if ( $request_count >= $this->get_request_limit() ) {
+			$banned_ips = (array) get_option( 'ollama_banned_ips', [] );
+			$banned_ips[] = $ip;
+			update_option( 'ollama_banned_ips', $banned_ips );
+			$error_message = apply_filters(
+				'ollama_chatbot_rate_limit_error',
+				__( 'Your IP has been temporarily blocked due to excessive requests.', self::TEXT_DOMAIN ),
+				$ip
+			);
+			// Notify admin if errors exceed threshold.
+			$this->send_admin_notification( 'Chatbot Rate Limit Exceeded', sprintf( 'The IP %s has been blocked due to too many requests.', $ip ) );
+			return [ 'error' => $error_message ];
+		}
+		return [];
+	}
+
+	/**
+	 * Retrieve and validate API settings.
+	 *
+	 * @return array API settings or error.
+	 */
+	private function get_api_settings(): array {
+		$prompt   = trim( (string) get_option( 'ollama_prompt', '' ) );
+		$endpoint = trim( (string) get_option( 'ollama_endpoint', '' ) );
+		$api_key  = trim( (string) get_option( 'ollama_api_key', '' ) );
+		$model    = trim( (string) get_option( 'ollama_model', '' ) );
+		if ( empty( $prompt ) || empty( $endpoint ) || empty( $api_key ) || empty( $model ) ) {
+			return [ 'error' => __( 'One or more required API settings are missing.', self::TEXT_DOMAIN ) ];
+		}
+		if ( ! filter_var( $endpoint, FILTER_VALIDATE_URL ) ) {
+			return [ 'error' => __( 'Invalid API endpoint URL.', self::TEXT_DOMAIN ) ];
+		}
+		return [
+			'prompt'   => $prompt,
+			'endpoint' => apply_filters( 'ollama_chatbot_api_endpoint', $endpoint ),
+			'api_key'  => $api_key,
+			'model'    => $model,
+		];
+	}
+
+	/**
+	 * Retrieve a filtered API timeout.
+	 *
+	 * @return int Timeout in seconds.
+	 */
+	private function get_api_timeout(): int {
+		return (int) apply_filters( 'ollama_chatbot_api_timeout', 15 );
+	}
+
+	/**
+	 * Process a chat request with history and caching.
+	 *
+	 * @param string $user_message User's message.
+	 * @param string $ip           Client IP.
+	 * @return array Response or error.
+	 */
+	private function process_chat_request_logic( string $user_message, string $ip ): array {
+		if ( $this->is_ip_banned( $ip ) ) {
+			return [ 'error' => __( 'Your IP has been temporarily blocked due to excessive requests.', self::TEXT_DOMAIN ) ];
+		}
+		$rate_limit = $this->check_rate_limit( $ip );
+		if ( ! empty( $rate_limit ) ) {
+			return $rate_limit;
+		}
+		$user_message = trim( $user_message );
+		if ( empty( $user_message ) ) {
+			return [ 'error' => __( 'User message is empty.', self::TEXT_DOMAIN ) ];
+		}
+		$conversation_id = $this->get_conversation_id();
+		$history = $this->get_conversation_history( $conversation_id );
+
+		// Handle special commands.
+		if ( strtolower( $user_message ) === 'reset' ) {
+			$this->clear_conversation_history( $conversation_id );
+			return [
+				'userMessage'      => '<div class="ollama-chat-message ollama-user"><strong>You:</strong> ' . esc_html( $user_message ) . '</div>',
+				'assistantMessage' => '<div class="ollama-chat-message ollama-assistant"><strong>Assistant:</strong> ' . esc_html__( 'Conversation reset.', self::TEXT_DOMAIN ) . '</div>',
+				'conversation_id'  => $conversation_id,
+			];
+		}
+		if ( strtolower( $user_message ) === 'history' ) {
+			$formatted_history = '';
+			foreach ( $history as $msg ) {
+				$role = ucfirst( $msg['role'] );
+				$formatted_history .= sprintf(
+					'<div class="ollama-chat-message ollama-%s"><strong>%s:</strong> %s</div>',
+					esc_attr( $msg['role'] ),
+					esc_html( $role ),
+					wp_kses_post( $msg['content'] )
+				);
+			}
+			return [
+				'userMessage'      => '',
+				'assistantMessage' => $formatted_history,
+				'conversation_id'  => $conversation_id,
+			];
+		}
+
+		// Append user message.
+		$history[] = [ 'role' => 'user', 'content' => $user_message ];
+
+		// Check for cached API response.
+		if ( apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled ) ) {
+			$cache_key = 'ollama_api_cache_' . md5( serialize( $history ) );
+			$cached_response = get_transient( $cache_key );
+			if ( false !== $cached_response ) {
+				$this->debug_log( sprintf( 'Using cached API response for conversation %s', $conversation_id ) );
+				return $cached_response;
+			}
+		}
+
+		// Build API payload.
+		$api_payload = [
+			'model'    => '',
+			'messages' => $history,
+		];
+		$settings = $this->get_api_settings();
+		if ( isset( $settings['error'] ) ) {
+			return [ 'error' => $settings['error'] ];
+		}
+		if ( empty( $api_payload['model'] ) ) {
+			$api_payload['model'] = $settings['model'];
+		}
+		if ( empty( $history ) ) {
+			$history[] = [ 'role' => 'system', 'content' => $settings['prompt'] ];
+		}
+		do_action( 'ollama_chatbot_before_api_call', $api_payload, $ip );
+		try {
+			$response = wp_remote_post( $settings['endpoint'], [
+				'headers' => [
+					'Authorization' => 'Bearer ' . $settings['api_key'],
+					'Content-Type'  => 'application/json',
+				],
+				'body'    => wp_json_encode( $api_payload ),
+				'timeout' => $this->get_api_timeout(),
+			] );
+		} catch ( \Exception $e ) {
+			$this->debug_log( sprintf( 'Exception during API call for IP %s: %s', $ip, $e->getMessage() ) );
+			return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
+		}
+		if ( is_wp_error( $response ) ) {
+			$this->debug_log( sprintf( 'API error for IP %s: %s', $ip, $response->get_error_message() ) );
+			return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
+		}
+		$status_code   = (int) wp_remote_retrieve_response_code( $response );
+		$response_body = wp_remote_retrieve_body( $response );
+		$this->debug_log( sprintf( 'API response for IP %s: %s', $ip, $response_body ) );
+		if ( $status_code !== 200 ) {
+			$this->debug_log( sprintf( 'API returned status code %d for IP %s', $status_code, $ip ) );
+			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', self::TEXT_DOMAIN ) ];
+		}
+		$response_data = json_decode( $response_body, true );
+		if ( json_last_error() !== JSON_ERROR_NONE ) {
+			$this->debug_log( 'JSON decode error: ' . json_last_error_msg() );
+			return [ 'error' => __( 'Invalid response from API.', self::TEXT_DOMAIN ) ];
+		}
+		do_action( 'ollama_chatbot_after_api_call', $response_data, $ip );
+		if ( isset( $response_data['choices'][0]['message']['content'] ) ) {
+			$assistant_message = $response_data['choices'][0]['message']['content'];
+			$history[] = [ 'role' => 'assistant', 'content' => $assistant_message ];
+			$this->update_conversation_history( $conversation_id, $history );
+			$formatted_user_message = sprintf(
+				'<div class="ollama-chat-message ollama-user"><strong>%s:</strong> %s</div>',
+				esc_html__( 'You', self::TEXT_DOMAIN ),
+				esc_html( $user_message )
+			);
+			$formatted_assistant_message = sprintf(
+				'<div class="ollama-chat-message ollama-assistant"><strong>%s:</strong> %s</div>',
+				esc_html__( 'Assistant', self::TEXT_DOMAIN ),
+				wp_kses_post( $assistant_message )
+			);
+			$response_final = apply_filters( 'ollama_chatbot_response', [
+				'userMessage'      => $formatted_user_message,
+				'assistantMessage' => $formatted_assistant_message,
+				'conversation_id'  => $conversation_id,
+			], $response_data );
+			if ( apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled ) ) {
+				set_transient( $cache_key, $response_final, self::$cache_expiration );
+			}
+			return $response_final;
+		} else {
+			$this->debug_log( 'Unexpected API response: ' . print_r( $response_data, true ) );
+			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', self::TEXT_DOMAIN ) ];
+		}
+	}
+
+	/**
+	 * Send a JSON response and exit.
+	 *
+	 * @param array $data   Response data.
+	 * @param int   $status HTTP status code.
+	 */
+	private function send_json_response( array $data, int $status = 200 ): void {
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			wp_send_json( $data, $status );
+		} else {
+			if ( $status >= 400 ) {
+				wp_send_json_error( $data, $status );
+			} else {
+				wp_send_json_success( $data, $status );
+			}
+		}
+		exit;
+	}
+
+	/**
+	 * Handle legacy admin-post chat requests.
+	 */
+	public function handle_chat_request(): void {
+		$this->validate_admin_request();
+		$ip = $this->get_client_ip();
+		$user_message = $this->get_post_param( 'userMessage' );
+		$result = $this->process_chat_request_logic( $user_message, $ip );
+		if ( isset( $result['error'] ) ) {
+			$this->send_json_response( [ 'message' => $result['error'] ], 400 );
+		} else {
+			$this->send_json_response( $result, 200 );
+		}
+	}
+
+	/**
+	 * Register REST API route for chat requests.
+	 */
+	public function register_rest_routes(): void {
+		register_rest_route( 'ollama-chatbot/v1', '/chat', [
+			'methods'             => 'POST',
+			'callback'            => [ $this, 'handle_chat_request_rest' ],
+			'permission_callback' => [ $this, 'rest_permission_check' ],
+		] );
+	}
+
+	/**
+	 * REST API permission check.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return bool|\WP_Error
+	 */
+	public function rest_permission_check( \WP_REST_Request $request ) {
+		$nonce = $request->get_header( 'X-WP-Nonce' );
+		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE_ACTION ) ) {
+			return new \WP_Error(
+				'rest_forbidden',
+				__( 'Nonce verification failed.', self::TEXT_DOMAIN ),
+				[ 'status' => 403 ]
+			);
+		}
+		return true;
+	}
+
+	/**
+	 * Handle REST API chat requests.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response JSON response.
+	 */
+	public function handle_chat_request_rest( \WP_REST_Request $request ): \WP_REST_Response {
+		$user_message = sanitize_textarea_field( wp_unslash( (string)$request->get_param( 'userMessage' ) ) );
+		$ip = $this->get_client_ip();
+		$result = $this->process_chat_request_logic( $user_message, $ip );
+		if ( isset( $result['error'] ) ) {
+			return new \WP_REST_Response( [ 'message' => $result['error'] ], 400 );
+		}
+		return new \WP_REST_Response( $result, 200 );
+	}
+
+	/* ==========================================================================
+	   EXTENDED REST API: Conversation Log Endpoints
+	========================================================================== */
+
+	/**
+	 * Register REST API route for conversation log retrieval.
+	 */
+	public function register_rest_log_routes(): void {
+		register_rest_route( 'ollama-chatbot/v1', '/logs/(?P<id>[\w\-\.]+)', [
+			'methods'             => 'GET',
+			'callback'            => [ $this, 'get_conversation_log_rest' ],
+			'permission_callback' => [ $this, 'rest_permission_check' ],
+		] );
+	}
+
+	/**
+	 * REST API endpoint: Get conversation log by ID.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response JSON response.
+	 */
+	public function get_conversation_log_rest( \WP_REST_Request $request ): \WP_REST_Response {
+		$conversation_id = sanitize_text_field( $request->get_param( 'id' ) );
+		if ( empty( $conversation_id ) ) {
+			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID required.', self::TEXT_DOMAIN ) ], 400 );
+		}
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$log = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_name} WHERE conversation_id = %s", $conversation_id ), ARRAY_A );
+		if ( $log ) {
+			return new \WP_REST_Response( $log, 200 );
+		}
+		return new \WP_REST_Response( [ 'message' => __( 'Log not found.', self::TEXT_DOMAIN ) ], 404 );
+	}
+
+	/* ==========================================================================
+	   SCHEDULED TASKS & DEBUGGING
+	========================================================================== */
+
+	/**
+	 * Clear banned IPs.
+	 */
+	public function clear_banned_ips(): void {
+		update_option( 'ollama_banned_ips', [] );
+	}
+
+	/**
+	 * Scheduled cleanup: Delete logs older than retention period.
+	 */
+	public function cleanup_conversation_logs(): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$days = (int) apply_filters( 'ollama_chatbot_log_retention_days', self::LOG_RETENTION_DAYS );
+		$cutoff = date( 'Y-m-d H:i:s', strtotime( "-{$days} days" ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table_name} WHERE created_at < %s", $cutoff ) );
+		$this->debug_log( "Cleaned up logs older than {$days} days." );
+	}
+
+	/**
+	 * Write debug logs.
+	 *
+	 * @param string $message Log message.
+	 */
+	private function debug_log( string $message ): void {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			error_log( sprintf( '[Ollama Chatbot] %s | User Agent: %s', $message, $_SERVER['HTTP_USER_AGENT'] ?? 'unknown' ) );
+		}
+	}
+
+	/* ==========================================================================
+	   WP-CLI COMMANDS, GUTENBERG BLOCK & WIDGET
+	========================================================================== */
+
+	/**
+	 * Register WP-CLI commands.
+	 */
+	private function register_wp_cli_commands(): void {
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			\WP_CLI::add_command( 'ollama-chatbot', function ( $args, $assoc_args ) {
+				\WP_CLI::line( 'Listing recent conversation logs:' );
+				global $wpdb;
+				$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+				$logs = $wpdb->get_results( "SELECT conversation_id, created_at FROM {$table_name} ORDER BY created_at DESC LIMIT 10", ARRAY_A );
+				foreach ( $logs as $log ) {
+					\WP_CLI::line( sprintf( "%s - %s", $log['conversation_id'], $log['created_at'] ) );
+				}
+			}, [
+				'shortdesc' => 'List recent chatbot conversation logs.'
+			] );
+		}
+	}
+
+	/**
+	 * Register Gutenberg block.
+	 */
+	private function register_gutenberg_block(): void {
+		add_action( 'init', function () {
+			if ( function_exists( 'register_block_type' ) ) {
+				register_block_type( 'ollama/chatbot', [
+					'editor_script'   => 'ollama-chatbot-script',
+					'render_callback' => [ $this, 'render_shortcode' ],
+				] );
+			}
+		} );
+	}
+
+	/**
+	 * Register legacy widget.
+	 */
+	private function register_widget(): void {
+		add_action( 'widgets_init', function () {
+			register_widget( \Ollama\Chatbot\Widget\Chatbot_Widget::class );
+		} );
+	}
+
+	/* ==========================================================================
+	   PLUGIN ACTIVATION, DEACTIVATION & UNINSTALL
+	========================================================================== */
+
+	/**
+	 * Plugin activation: Schedule events, create DB table, set defaults.
+	 */
+	public static function activate(): void {
+		if ( ! wp_next_scheduled( 'ollama_hourly_event' ) ) {
+			wp_schedule_event( time(), 'hourly', 'ollama_hourly_event' );
+		}
+		if ( ! wp_next_scheduled( 'ollama_cleanup_conversation_logs' ) ) {
+			wp_schedule_event( time(), 'daily', 'ollama_cleanup_conversation_logs' );
+		}
+		$default_options = [
+			'ollama_endpoint' => '',
+			'ollama_api_key'  => '',
+			'ollama_model'    => '',
+			'ollama_prompt'   => '',
+		];
+		foreach ( $default_options as $key => $value ) {
+			if ( false === get_option( $key ) ) {
+				add_option( $key, $value );
+			}
+		}
+		self::create_conversation_table();
+	}
+
+	/**
+	 * Plugin deactivation: Clear scheduled events.
+	 */
+	public static function deactivate(): void {
+		wp_clear_scheduled_hook( 'ollama_hourly_event' );
+		wp_clear_scheduled_hook( 'ollama_cleanup_conversation_logs' );
+	}
+
+	/**
+	 * Plugin uninstall: Remove options and drop DB table.
+	 */
+	public static function uninstall(): void {
+		delete_option( 'ollama_endpoint' );
+		delete_option( 'ollama_api_key' );
+		delete_option( 'ollama_model' );
+		delete_option( 'ollama_prompt' );
+		delete_option( 'ollama_banned_ips' );
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$wpdb->query( "DROP TABLE IF EXISTS {$table_name}" );
+	}
+
+	/**
+	 * Create custom DB table for conversation logs.
+	 */
+	public static function create_conversation_table(): void {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
+		$charset_collate = $wpdb->get_charset_collate();
+		$sql = "CREATE TABLE {$table_name} (
+			id mediumint(9) NOT NULL AUTO_INCREMENT,
+			conversation_id varchar(255) NOT NULL,
+			user_id bigint(20) DEFAULT 0,
+			user_ip varchar(100) NOT NULL,
+			chat_history longtext NOT NULL,
+			created_at datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY conversation_id (conversation_id)
+		) $charset_collate;";
+		require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
+		dbDelta( $sql );
+	}
+
+	/**
+	 * Send admin notification email.
+	 *
+	 * @param string $subject Email subject.
+	 * @param string $message Email body.
+	 */
+	private function send_admin_notification( string $subject, string $message ): void {
+		$admin_email = apply_filters( 'ollama_chatbot_admin_email', get_option( 'admin_email' ) );
+		wp_mail( $admin_email, $subject, $message );
+	}
 }
 
-// Function to clear request counts every hour
-function ollama_clear_request_counts() {
-    $banned_ips = get_option('ollama_banned_ips', []);
-    foreach ($banned_ips as $ip) {
-        delete_transient('ollama_request_count_' . $ip);
-    }
-}
-add_action('hourly_event', 'ollama_clear_request_counts');
+/* ==========================================================================
+   PLUGIN HOOKS & INITIALIZATION
+========================================================================== */
+
+register_activation_hook( __FILE__, [ Chatbot::class, 'activate' ] );
+register_deactivation_hook( __FILE__, [ Chatbot::class, 'deactivate' ] );
+register_uninstall_hook( __FILE__, [ Chatbot::class, 'uninstall' ] );
+
+Chatbot::get_instance();
