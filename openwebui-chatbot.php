@@ -91,7 +91,7 @@ final class Chatbot {
 	 * Prevent unserializing.
 	 */
 	public function __wakeup() {
-		throw new \Exception( 'Cannot unserialize a singleton.' );
+		throw new \Exception( __( 'Cannot unserialize a singleton.', self::TEXT_DOMAIN ) );
 	}
 
 	/* ==========================================================================
@@ -117,7 +117,7 @@ final class Chatbot {
 	 * Initialize hooks, actions, and filters.
 	 */
 	private function init_hooks(): void {
-		$this->debug_log( 'Chatbot Plugin Loaded' );
+		$this->debug_log( __( 'Chatbot Plugin Loaded', self::TEXT_DOMAIN ) );
 
 		// Enqueue assets.
 		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
@@ -627,7 +627,7 @@ final class Chatbot {
 				$ip
 			);
 			// Notify admin if rate limit is exceeded.
-			$this->send_admin_notification( 'Chatbot Rate Limit Exceeded', sprintf( 'The IP %s has been blocked due to too many requests.', $ip ) );
+			$this->send_admin_notification( __( 'Chatbot Rate Limit Exceeded', self::TEXT_DOMAIN ), sprintf( __( 'The IP %s has been blocked due to too many requests.', self::TEXT_DOMAIN ), $ip ) );
 			return [ 'error' => $error_message ];
 		}
 		return [];
@@ -692,8 +692,8 @@ final class Chatbot {
 		if ( strtolower( $user_message ) === 'reset' ) {
 			$this->clear_conversation_history( $conversation_id );
 			return [
-				'userMessage'      => '<div class="ollama-chat-message ollama-user"><strong>You:</strong> ' . esc_html( $user_message ) . '</div>',
-				'assistantMessage' => '<div class="ollama-chat-message ollama-assistant"><strong>Assistant:</strong> ' . esc_html__( 'Conversation reset.', self::TEXT_DOMAIN ) . '</div>',
+				'userMessage'      => '<div class="ollama-chat-message ollama-user"><strong>' . esc_html__( 'You', self::TEXT_DOMAIN ) . ':</strong> ' . esc_html( $user_message ) . '</div>',
+				'assistantMessage' => '<div class="ollama-chat-message ollama-assistant"><strong>' . esc_html__( 'Assistant', self::TEXT_DOMAIN ) . ':</strong> ' . esc_html__( 'Conversation reset.', self::TEXT_DOMAIN ) . '</div>',
 				'conversation_id'  => $conversation_id,
 			];
 		}
@@ -751,6 +751,9 @@ final class Chatbot {
 			$history[] = [ 'role' => 'system', 'content' => $settings['prompt'] ];
 		}
 		do_action( 'ollama_chatbot_before_api_call', $api_payload, $ip );
+		
+		// Measure API response time.
+		$start_time = microtime( true );
 		try {
 			$response = wp_remote_post( $settings['endpoint'], [
 				'headers' => [
@@ -765,8 +768,7 @@ final class Chatbot {
 			// Fallback to secondary endpoint with exponential backoff.
 			$fallback_endpoint = apply_filters( 'ollama_chatbot_fallback_endpoint', '' );
 			if ( ! empty( $fallback_endpoint ) ) {
-				// Exponential backoff (e.g., retry after 2 seconds).
-				sleep( 2 );
+				sleep( 2 ); // Exponential backoff delay (could be increased on subsequent retries).
 				$response = wp_remote_post( $fallback_endpoint, [
 					'headers' => [
 						'Authorization' => 'Bearer ' . $settings['api_key'],
@@ -779,6 +781,8 @@ final class Chatbot {
 				return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
 			}
 		}
+		$api_duration = microtime( true ) - $start_time;
+		$this->debug_log( sprintf( 'API call for IP %s took %.3f seconds', $ip, $api_duration ) );
 		if ( is_wp_error( $response ) ) {
 			$this->debug_log( sprintf( 'API error for IP %s: %s', $ip, $response->get_error_message() ) );
 			return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
@@ -814,14 +818,16 @@ final class Chatbot {
 				'userMessage'      => $formatted_user_message,
 				'assistantMessage' => $formatted_assistant_message,
 				'conversation_id'  => $conversation_id,
+				'apiResponseTime'  => $api_duration,
 			], $response_data );
-			if ( apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled ) ) {
+			if ( $cache_enabled ) {
 				set_transient( $cache_key, $response_final, self::$cache_expiration );
 				wp_cache_set( $cache_key, $response_final, 'ollama_chatbot', self::$cache_expiration );
 			}
-			// Trigger feedback hook for sentiment analysis.
+			// Trigger feedback hooks for sentiment analysis & monitoring.
 			do_action( 'ollama_chatbot_after_response', $conversation_id, $response_data );
 			do_action( 'ollama_chatbot_after_sentiment_analysis', $conversation_id, $response_final );
+			do_action( 'ollama_chatbot_monitoring_handler', $conversation_id, $api_duration );
 			return $response_final;
 		} else {
 			$this->debug_log( 'Unexpected API response: ' . print_r( $response_data, true ) );
@@ -963,7 +969,7 @@ final class Chatbot {
 		$days = (int) apply_filters( 'ollama_chatbot_log_retention_days', self::LOG_RETENTION_DAYS );
 		$cutoff = date( 'Y-m-d H:i:s', strtotime( "-{$days} days" ) );
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table_name} WHERE created_at < %s", $cutoff ) );
-		$this->debug_log( "Cleaned up logs older than {$days} days." );
+		$this->debug_log( sprintf( __( "Cleaned up logs older than %d days.", self::TEXT_DOMAIN ), $days ) );
 	}
 
 	/**
@@ -987,7 +993,7 @@ final class Chatbot {
 	private function register_wp_cli_commands(): void {
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			\WP_CLI::add_command( 'ollama-chatbot', function ( $args, $assoc_args ) {
-				\WP_CLI::line( 'Listing recent conversation logs:' );
+				\WP_CLI::line( __( 'Listing recent conversation logs:', self::TEXT_DOMAIN ) );
 				global $wpdb;
 				$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
 				$logs = $wpdb->get_results( "SELECT conversation_id, created_at FROM {$table_name} ORDER BY created_at DESC LIMIT 10", ARRAY_A );
@@ -995,15 +1001,14 @@ final class Chatbot {
 					\WP_CLI::line( sprintf( "%s - %s", $log['conversation_id'], $log['created_at'] ) );
 				}
 			}, [
-				'shortdesc' => 'List recent chatbot conversation logs.',
+				'shortdesc' => __( 'List recent chatbot conversation logs.', self::TEXT_DOMAIN ),
 			] );
 			\WP_CLI::add_command( 'ollama-chatbot-flush-cache', function () {
-				// Flush both transient and object cache.
 				delete_transient( 'ollama_api_cache_*' );
 				wp_cache_flush();
-				\WP_CLI::success( 'API cache flushed.' );
+				\WP_CLI::success( __( 'API cache flushed.', self::TEXT_DOMAIN ) );
 			}, [
-				'shortdesc' => 'Flush API response cache.',
+				'shortdesc' => __( 'Flush API response cache.', self::TEXT_DOMAIN ),
 			] );
 		}
 	}
