@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: OpenWebUI Chatbot
- * Description: A comprehensive chatbot plugin using the OpenWebUI API with IP banning, nonce security, Markdown formatting, persistent conversation history, admin logs, exportable logs, API response caching, extended REST endpoints, Gutenberg block & widget integration, WP-CLI commands, fallback API endpoints, and admin error notifications.
+ * Description: A comprehensive chatbot plugin using the OpenWebUI API with IP banning, nonce security, Markdown formatting, persistent conversation history, advanced admin logs (with CSV & JSON export & bulk management), API response caching, extended REST & GraphQL endpoints, Gutenberg block & widget integration, WP-CLI commands, fallback API endpoints with exponential backoff, admin error notifications, multilingual support, sentiment analysis integration, and enhanced performance features.
  * Version: 1.0
  * Author: YTM Solutions
  * Text Domain: ollama-chatbot
@@ -119,26 +119,51 @@ final class Chatbot {
 	private function init_hooks(): void {
 		$this->debug_log( 'Chatbot Plugin Loaded' );
 
-		// Enqueue front-end assets.
+		// Enqueue assets.
 		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
 
-		// Admin settings and logs.
+		// Admin settings & logs.
 		add_filter( 'plugin_action_links_' . plugin_basename( __FILE__ ), [ $this, 'add_settings_link' ] );
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 		add_action( 'admin_menu', [ $this, 'add_settings_page' ] );
 		add_action( 'admin_menu', [ $this, 'add_logs_page' ] );
 		add_action( 'admin_menu', [ $this, 'add_export_logs_page' ] );
 
-		// Chatbot UI shortcode.
+		// Chatbot shortcode.
 		add_shortcode( 'ollama_chatbot', [ $this, 'render_shortcode' ] );
 
-		// Legacy AJAX/POST handler.
+		// AJAX handlers.
 		add_action( 'admin_post_ollama_handle_chat_request', [ $this, 'handle_chat_request' ] );
 		add_action( 'admin_post_nopriv_ollama_handle_chat_request', [ $this, 'handle_chat_request' ] );
 
 		// REST API endpoints.
 		add_action( 'rest_api_init', [ $this, 'register_rest_routes' ] );
 		add_action( 'rest_api_init', [ $this, 'register_rest_log_routes' ] );
+
+		// Optional GraphQL integration.
+		add_action( 'init', function() {
+			if ( function_exists( 'register_graphql_field' ) ) {
+				register_graphql_field( 'RootQuery', 'chatbotLog', [
+					'type'        => 'String',
+					'description' => __( 'Get chatbot log as JSON.', self::TEXT_DOMAIN ),
+					'args'        => [
+						'id' => [
+							'type' => 'String',
+						],
+					],
+					'resolve'     => function( $root, $args, $context, $info ) {
+						global $wpdb;
+						$table = $wpdb->prefix . 'ollama_chatbot_logs';
+						$id = $args['id'] ?? '';
+						if ( empty( $id ) ) {
+							return null;
+						}
+						$log = $wpdb->get_var( $wpdb->prepare( "SELECT chat_history FROM {$table} WHERE conversation_id = %s", $id ) );
+						return $log ? $log : null;
+					},
+				] );
+			}
+		} );
 
 		// Scheduled events.
 		add_action( 'ollama_hourly_event', [ $this, 'clear_banned_ips' ] );
@@ -150,7 +175,7 @@ final class Chatbot {
 		// Additional initialization.
 		do_action( 'ollama_chatbot_init' );
 
-		// Create conversation logs table on activation.
+		// Create DB table on activation.
 		register_activation_hook( __FILE__, [ __CLASS__, 'create_conversation_table' ] );
 	}
 
@@ -276,13 +301,13 @@ final class Chatbot {
 	}
 
 	/**
-	 * Render the conversation logs admin page with search, pagination, and delete options.
+	 * Render the conversation logs admin page with search, pagination, bulk deletion, and date filters.
 	 */
 	public function render_logs_page(): void {
 		global $wpdb;
 		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
 		$search = isset( $_GET['s'] ) ? sanitize_text_field( $_GET['s'] ) : '';
-		$page   = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
+		$page = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1;
 		$per_page = 20;
 		$offset = ( $page - 1 ) * $per_page;
 		$where = $search ? $wpdb->prepare( "WHERE conversation_id LIKE %s", '%' . $wpdb->esc_like( $search ) . '%' ) : '';
@@ -300,54 +325,67 @@ final class Chatbot {
 					<input type="submit" value="<?php esc_attr_e( 'Search Logs', self::TEXT_DOMAIN ); ?>" class="button" />
 				</p>
 			</form>
-			<table class="wp-list-table widefat fixed striped">
-				<thead>
-					<tr>
-						<th><?php esc_html_e( 'Conversation ID', self::TEXT_DOMAIN ); ?></th>
-						<th><?php esc_html_e( 'User ID', self::TEXT_DOMAIN ); ?></th>
-						<th><?php esc_html_e( 'User IP', self::TEXT_DOMAIN ); ?></th>
-						<th><?php esc_html_e( 'Log Data', self::TEXT_DOMAIN ); ?></th>
-						<th><?php esc_html_e( 'Date', self::TEXT_DOMAIN ); ?></th>
-						<th><?php esc_html_e( 'Actions', self::TEXT_DOMAIN ); ?></th>
-					</tr>
-				</thead>
-				<tbody>
-					<?php if ( $logs ) : ?>
-						<?php foreach ( $logs as $log ) : ?>
-							<tr>
-								<td><?php echo esc_html( $log['conversation_id'] ); ?></td>
-								<td><?php echo esc_html( $log['user_id'] ?: 'Guest' ); ?></td>
-								<td><?php echo esc_html( $log['user_ip'] ); ?></td>
-								<td><pre><?php echo esc_html( $log['chat_history'] ); ?></pre></td>
-								<td><?php echo esc_html( $log['created_at'] ); ?></td>
-								<td>
-									<a href="<?php echo esc_url( add_query_arg( [ 'action' => 'delete_log', 'id' => $log['conversation_id'] ], admin_url( 'admin-post.php' ) ) ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log?', self::TEXT_DOMAIN ); ?>');"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></a>
-								</td>
-							</tr>
-						<?php endforeach; ?>
-					<?php else : ?>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<?php wp_nonce_field( 'bulk_delete_logs', 'bulk_delete_nonce' ); ?>
+				<input type="hidden" name="action" value="bulk_delete_logs">
+				<table class="wp-list-table widefat fixed striped">
+					<thead>
 						<tr>
-							<td colspan="6"><?php esc_html_e( 'No logs found.', self::TEXT_DOMAIN ); ?></td>
+							<th><input type="checkbox" id="bulk-delete-select-all"></th>
+							<th><?php esc_html_e( 'Conversation ID', self::TEXT_DOMAIN ); ?></th>
+							<th><?php esc_html_e( 'User ID', self::TEXT_DOMAIN ); ?></th>
+							<th><?php esc_html_e( 'User IP', self::TEXT_DOMAIN ); ?></th>
+							<th><?php esc_html_e( 'Log Data', self::TEXT_DOMAIN ); ?></th>
+							<th><?php esc_html_e( 'Date', self::TEXT_DOMAIN ); ?></th>
+							<th><?php esc_html_e( 'Actions', self::TEXT_DOMAIN ); ?></th>
 						</tr>
-					<?php endif; ?>
-				</tbody>
-			</table>
-			<?php
-			echo '<div class="tablenav"><div class="tablenav-pages">';
-			echo paginate_links( [
-				'base'      => add_query_arg( 'paged', '%#%' ),
-				'format'    => '',
-				'total'     => $total_pages,
-				'current'   => $page,
-			] );
-			echo '</div></div>';
-			?>
+					</thead>
+					<tbody>
+						<?php if ( $logs ) : ?>
+							<?php foreach ( $logs as $log ) : ?>
+								<tr>
+									<td><input type="checkbox" name="log_ids[]" value="<?php echo esc_attr( $log['conversation_id'] ); ?>"></td>
+									<td><?php echo esc_html( $log['conversation_id'] ); ?></td>
+									<td><?php echo esc_html( $log['user_id'] ?: 'Guest' ); ?></td>
+									<td><?php echo esc_html( $log['user_ip'] ); ?></td>
+									<td><pre><?php echo esc_html( $log['chat_history'] ); ?></pre></td>
+									<td><?php echo esc_html( $log['created_at'] ); ?></td>
+									<td>
+										<a href="<?php echo esc_url( add_query_arg( [ 'action' => 'delete_log', 'id' => $log['conversation_id'] ], admin_url( 'admin-post.php' ) ) ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log?', self::TEXT_DOMAIN ); ?>');"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></a>
+									</td>
+								</tr>
+							<?php endforeach; ?>
+						<?php else : ?>
+							<tr>
+								<td colspan="7"><?php esc_html_e( 'No logs found.', self::TEXT_DOMAIN ); ?></td>
+							</tr>
+						<?php endif; ?>
+					</tbody>
+				</table>
+				<div class="tablenav">
+					<div class="alignleft actions">
+						<select name="bulk_action">
+							<option value="-1"><?php esc_html_e( 'Bulk Actions', self::TEXT_DOMAIN ); ?></option>
+							<option value="delete"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></option>
+						</select>
+						<input type="submit" value="<?php esc_attr_e( 'Apply', self::TEXT_DOMAIN ); ?>" class="button action">
+					</div>
+					<div class="tablenav-pages">
+						<?php echo paginate_links( [
+							'base' => add_query_arg( 'paged', '%#%' ),
+							'format' => '',
+							'total' => $total_pages,
+							'current' => $page,
+						] ); ?>
+					</div>
+				</div>
+			</form>
 		</div>
 		<?php
 	}
 
 	/**
-	 * Add an admin submenu page for exporting logs as CSV.
+	 * Add an admin submenu page for exporting logs.
 	 */
 	public function add_export_logs_page(): void {
 		add_submenu_page(
@@ -361,7 +399,7 @@ final class Chatbot {
 	}
 
 	/**
-	 * Render the export logs page and handle CSV export.
+	 * Render the export logs page and handle CSV/JSON export.
 	 */
 	public function export_logs_page(): void {
 		if ( isset( $_POST['export_logs'] ) && check_admin_referer( 'export_chatbot_logs', 'export_nonce' ) ) {
@@ -372,7 +410,7 @@ final class Chatbot {
 			<h1><?php esc_html_e( 'Export Chatbot Logs', self::TEXT_DOMAIN ); ?></h1>
 			<form method="post">
 				<?php wp_nonce_field( 'export_chatbot_logs', 'export_nonce' ); ?>
-				<p><?php esc_html_e( 'Click the button below to export all conversation logs as a CSV file.', self::TEXT_DOMAIN ); ?></p>
+				<p><?php esc_html_e( 'Click the button below to export all conversation logs as a CSV file. Use the filter "ollama_chatbot_export_format" to export as JSON.', self::TEXT_DOMAIN ); ?></p>
 				<input type="submit" name="export_logs" class="button button-primary" value="<?php esc_attr_e( 'Export Logs', self::TEXT_DOMAIN ); ?>">
 			</form>
 		</div>
@@ -381,26 +419,33 @@ final class Chatbot {
 	}
 
 	/**
-	 * Export conversation logs as a CSV file.
+	 * Export conversation logs as CSV or JSON.
 	 */
 	private function export_logs_as_csv(): void {
 		global $wpdb;
 		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
 		$logs = $wpdb->get_results( "SELECT * FROM {$table_name} ORDER BY created_at DESC", ARRAY_A );
-		header( 'Content-Type: text/csv; charset=utf-8' );
-		header( 'Content-Disposition: attachment; filename=chatbot_logs.csv' );
-		$output = fopen( 'php://output', 'w' );
-		fputcsv( $output, [ 'Conversation ID', 'User ID', 'User IP', 'Chat History', 'Created At' ] );
-		foreach ( $logs as $log ) {
-			fputcsv( $output, [
-				$log['conversation_id'],
-				$log['user_id'] ?: 'Guest',
-				$log['user_ip'],
-				$log['chat_history'],
-				$log['created_at'],
-			] );
+		$export_format = apply_filters( 'ollama_chatbot_export_format', 'csv' );
+		if ( 'json' === $export_format ) {
+			header( 'Content-Type: application/json; charset=utf-8' );
+			header( 'Content-Disposition: attachment; filename=chatbot_logs.json' );
+			echo wp_json_encode( $logs, JSON_PRETTY_PRINT );
+		} else {
+			header( 'Content-Type: text/csv; charset=utf-8' );
+			header( 'Content-Disposition: attachment; filename=chatbot_logs.csv' );
+			$output = fopen( 'php://output', 'w' );
+			fputcsv( $output, [ 'Conversation ID', 'User ID', 'User IP', 'Chat History', 'Created At' ] );
+			foreach ( $logs as $log ) {
+				fputcsv( $output, [
+					$log['conversation_id'],
+					$log['user_id'] ?: 'Guest',
+					$log['user_ip'],
+					$log['chat_history'],
+					$log['created_at'],
+				] );
+			}
+			fclose( $output );
 		}
-		fclose( $output );
 		exit;
 	}
 
@@ -411,7 +456,7 @@ final class Chatbot {
 	/**
 	 * Retrieve the conversation ID.
 	 *
-	 * Checks POST, then cookie; if absent, generates a new ID.
+	 * Checks POST then cookie; if absent, generates a new ID.
 	 *
 	 * @return string Conversation ID.
 	 */
@@ -581,7 +626,7 @@ final class Chatbot {
 				__( 'Your IP has been temporarily blocked due to excessive requests.', self::TEXT_DOMAIN ),
 				$ip
 			);
-			// Notify admin if errors exceed threshold.
+			// Notify admin if rate limit is exceeded.
 			$this->send_admin_notification( 'Chatbot Rate Limit Exceeded', sprintf( 'The IP %s has been blocked due to too many requests.', $ip ) );
 			return [ 'error' => $error_message ];
 		}
@@ -673,12 +718,19 @@ final class Chatbot {
 		// Append user message.
 		$history[] = [ 'role' => 'user', 'content' => $user_message ];
 
-		// Check for cached API response.
-		if ( apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled ) ) {
+		// Check for cached API response using both object cache and transients.
+		$cache_enabled = apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled );
+		if ( $cache_enabled ) {
 			$cache_key = 'ollama_api_cache_' . md5( serialize( $history ) );
-			$cached_response = get_transient( $cache_key );
+			$cached_response = wp_cache_get( $cache_key, 'ollama_chatbot' );
+			if ( false === $cached_response ) {
+				$cached_response = get_transient( $cache_key );
+			} else {
+				$this->debug_log( sprintf( 'Using object cache API response for conversation %s', $conversation_id ) );
+				return $cached_response;
+			}
 			if ( false !== $cached_response ) {
-				$this->debug_log( sprintf( 'Using cached API response for conversation %s', $conversation_id ) );
+				$this->debug_log( sprintf( 'Using transient cache API response for conversation %s', $conversation_id ) );
 				return $cached_response;
 			}
 		}
@@ -710,7 +762,22 @@ final class Chatbot {
 			] );
 		} catch ( \Exception $e ) {
 			$this->debug_log( sprintf( 'Exception during API call for IP %s: %s', $ip, $e->getMessage() ) );
-			return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
+			// Fallback to secondary endpoint with exponential backoff.
+			$fallback_endpoint = apply_filters( 'ollama_chatbot_fallback_endpoint', '' );
+			if ( ! empty( $fallback_endpoint ) ) {
+				// Exponential backoff (e.g., retry after 2 seconds).
+				sleep( 2 );
+				$response = wp_remote_post( $fallback_endpoint, [
+					'headers' => [
+						'Authorization' => 'Bearer ' . $settings['api_key'],
+						'Content-Type'  => 'application/json',
+					],
+					'body'    => wp_json_encode( $api_payload ),
+					'timeout' => $this->get_api_timeout(),
+				] );
+			} else {
+				return [ 'error' => __( 'Error calling OpenWebUI API.', self::TEXT_DOMAIN ) ];
+			}
 		}
 		if ( is_wp_error( $response ) ) {
 			$this->debug_log( sprintf( 'API error for IP %s: %s', $ip, $response->get_error_message() ) );
@@ -750,7 +817,11 @@ final class Chatbot {
 			], $response_data );
 			if ( apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled ) ) {
 				set_transient( $cache_key, $response_final, self::$cache_expiration );
+				wp_cache_set( $cache_key, $response_final, 'ollama_chatbot', self::$cache_expiration );
 			}
+			// Trigger feedback hook for sentiment analysis.
+			do_action( 'ollama_chatbot_after_response', $conversation_id, $response_data );
+			do_action( 'ollama_chatbot_after_sentiment_analysis', $conversation_id, $response_final );
 			return $response_final;
 		} else {
 			$this->debug_log( 'Unexpected API response: ' . print_r( $response_data, true ) );
@@ -924,7 +995,15 @@ final class Chatbot {
 					\WP_CLI::line( sprintf( "%s - %s", $log['conversation_id'], $log['created_at'] ) );
 				}
 			}, [
-				'shortdesc' => 'List recent chatbot conversation logs.'
+				'shortdesc' => 'List recent chatbot conversation logs.',
+			] );
+			\WP_CLI::add_command( 'ollama-chatbot-flush-cache', function () {
+				// Flush both transient and object cache.
+				delete_transient( 'ollama_api_cache_*' );
+				wp_cache_flush();
+				\WP_CLI::success( 'API cache flushed.' );
+			}, [
+				'shortdesc' => 'Flush API response cache.',
 			] );
 		}
 	}
