@@ -10,6 +10,7 @@ declare(strict_types=1);
  * @package Ollama_Chatbot
  */
 namespace Ollama\Chatbot;
+
 // Define constants outside the class for global access
 define('OLLAMA_CHATBOT_VERSION', '1.2');
 define('OLLAMA_CHATBOT_TEXT_DOMAIN', 'ollama-chatbot');
@@ -76,11 +77,11 @@ final class Chatbot {
 	 *
 	 * @return Chatbot
 	 */
-	public static function get_instance(): chatbot {
-		if ( null === chatbot::$instance ) {
-			chatbot::$instance = new chatbot();
+	public static function get_instance(): Chatbot {
+		if ( null === self::$instance ) {
+			self::$instance = new self();
 		}
-		return chatbot::$instance;
+		return self::$instance;
 	}
 
 	/**
@@ -104,7 +105,7 @@ final class Chatbot {
 	 * Prevent unserializing.
 	 */
 	public function __wakeup() {
-		throw new \Exception( __( 'Cannot unserialize a singleton.', Chatbot::TEXT_DOMAIN ) );
+		throw new \Exception( __( 'Cannot unserialize a singleton.', self::TEXT_DOMAIN ) );
 	}
 
 	/* ==========================================================================
@@ -122,7 +123,7 @@ final class Chatbot {
 			define( 'OLLAMA_CHATBOT_URL', plugins_url( '', __FILE__ ) );
 		}
 		if ( ! defined( 'OLLAMA_CHATBOT_VERSION' ) ) {
-			define( 'OLLAMA_CHATBOT_VERSION', Chatbot::VERSION );
+			define( 'OLLAMA_CHATBOT_VERSION', self::VERSION );
 		}
 	}
 
@@ -130,7 +131,7 @@ final class Chatbot {
 	 * Initialize hooks, actions, and filters.
 	 */
 	private function init_hooks(): void {
-		$this->debug_log( __( 'Chatbot Plugin Loaded', chatbot::TEXT_DOMAIN ) );
+		$this->debug_log( __( 'Chatbot Plugin Loaded', self::TEXT_DOMAIN ) );
 
 		// Enqueue assets.
 		add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_scripts' ] );
@@ -161,7 +162,7 @@ final class Chatbot {
 			if ( function_exists( 'register_graphql_field' ) ) {
 				register_graphql_field( 'RootQuery', 'chatbotLog', [
 					'type'        => 'String',
-					'description' => __( 'Get chatbot log as JSON.', chatbot::TEXT_DOMAIN ),
+					'description' => __( 'Get chatbot log as JSON.', self::TEXT_DOMAIN ),
 					'args'        => [
 						'id' => [
 							'type' => 'String',
@@ -200,15 +201,13 @@ final class Chatbot {
 	 */
 	public function load_textdomain(): void {
 		load_plugin_textdomain(
-			chatbot::TEXT_DOMAIN,
+			self::TEXT_DOMAIN,
 			false,
 			dirname( plugin_basename( __FILE__ ) ) . '/languages/'
 		);
 	}
 
-	/* ==========================================================================
-	   ADMIN & FRONT-END FUNCTIONALITY
-	========================================================================== */
+	/* ========================================================================== ADMIN & FRONT-END FUNCTIONALITY ========================================================================== */
 
 	/**
 	 * Enqueue front-end styles and scripts.
@@ -218,7 +217,7 @@ final class Chatbot {
 			'ollama-chatbot-style',
 			OLLAMA_CHATBOT_URL . '/css/style.css',
 			[],
-			chatbot::VERSION
+			self::VERSION
 		);
 		wp_enqueue_script(
 			'axios',
@@ -238,7 +237,7 @@ final class Chatbot {
 			'ollama-chatbot-script',
 			OLLAMA_CHATBOT_URL . '/js/ollama-chatbot-script.js',
 			[ 'jquery', 'axios', 'markdown-it' ],
-			chatbot::VERSION,
+			self::VERSION,
 			true
 		);
 		wp_localize_script(
@@ -251,7 +250,7 @@ final class Chatbot {
 				'prompt'   => get_option( 'ollama_prompt' ),
 				'ajaxUrl'  => admin_url( 'admin-post.php' ),
 				'restUrl'  => esc_url_raw( rest_url( 'ollama-chatbot/v1/chat' ) ),
-				'nonce'    => wp_create_nonce( chatbot::NONCE_ACTION ),
+				'nonce'    => wp_create_nonce( self::NONCE_ACTION ),
 			]
 		);
 	}
@@ -263,7 +262,7 @@ final class Chatbot {
 		$settings_link = sprintf(
 			'<a href="%s">%s</a>',
 			esc_url( admin_url( 'options-general.php?page=ollama-chatbot-settings' ) ),
-			esc_html__( 'Settings', chatbot::TEXT_DOMAIN )
+			esc_html__( 'Settings', self::TEXT_DOMAIN )
 		);
 		$links[] = $settings_link;
 		return $links;
@@ -287,8 +286,8 @@ final class Chatbot {
 	 */
 	public function add_settings_page(): void {
 		add_options_page(
-			esc_html__( 'Ollama Chatbot Settings', chatbot::TEXT_DOMAIN ),
-			esc_html__( 'Ollama Chatbot', chatbot::TEXT_DOMAIN ),
+			esc_html__( 'Ollama Chatbot Settings', self::TEXT_DOMAIN ),
+			esc_html__( 'Ollama Chatbot', self::TEXT_DOMAIN ),
 			'manage_options',
 			'ollama-chatbot-settings',
 			[ $this, 'render_settings_page' ]
@@ -307,8 +306,8 @@ final class Chatbot {
 	 */
 	public function add_logs_page(): void {
 		add_menu_page(
-			esc_html__( 'Chatbot Logs', chatbot::TEXT_DOMAIN ),
-			esc_html__( 'Chatbot Logs', chatbot::TEXT_DOMAIN ),
+			esc_html__( 'Chatbot Logs', self::TEXT_DOMAIN ),
+			esc_html__( 'Chatbot Logs', self::TEXT_DOMAIN ),
 			'manage_options',
 			'ollama-chatbot-logs',
 			[ $this, 'render_logs_page' ],
@@ -316,12 +315,13 @@ final class Chatbot {
 			85
 		);
 	}
+
 	/**
 	 * Handle bulk deletion of logs.
 	 */
 	public function handle_bulk_delete_logs(): void {
 		if ( ! check_admin_referer( 'bulk_delete_logs', 'bulk_delete_nonce' ) ) {
-			wp_die( __( 'Nonce verification failed.', chatbot::TEXT_DOMAIN ) );
+			wp_die( __( 'Nonce verification failed.', self::TEXT_DOMAIN ) );
 		}
 		if ( isset( $_POST['log_ids'] ) && is_array( $_POST['log_ids'] ) ) {
 			global $wpdb;
@@ -335,7 +335,7 @@ final class Chatbot {
 	}
 
 	/**
-	 * Render the conversation logs admin page with search, pagination, bulk deletion, and date filters.
+	 * Render the conversation logs admin page.
 	 */
 	public function render_logs_page(): void {
 		global $wpdb;
@@ -350,13 +350,13 @@ final class Chatbot {
 		$total_pages = ceil( $total / $per_page );
 		?>
         <div class="wrap">
-            <h1><?php esc_html_e( 'Chatbot Conversation Logs', chatbot::TEXT_DOMAIN ); ?></h1>
+            <h1><?php esc_html_e( 'Chatbot Conversation Logs', self::TEXT_DOMAIN ); ?></h1>
             <form method="get">
                 <input type="hidden" name="page" value="ollama-chatbot-logs" />
                 <p class="search-box">
-                    <label class="screen-reader-text" for="log-search-input"><?php esc_html_e( 'Search Logs', chatbot::TEXT_DOMAIN ); ?></label>
+                    <label class="screen-reader-text" for="log-search-input"><?php esc_html_e( 'Search Logs', self::TEXT_DOMAIN ); ?></label>
                     <input type="search" id="log-search-input" name="s" value="<?php echo esc_attr( $search ); ?>" />
-                    <input type="submit" value="<?php esc_attr_e( 'Search Logs', chatbot::TEXT_DOMAIN ); ?>" class="button" />
+                    <input type="submit" value="<?php esc_attr_e( 'Search Logs', self::TEXT_DOMAIN ); ?>" class="button" />
                 </p>
             </form>
             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -366,12 +366,12 @@ final class Chatbot {
                     <thead>
                     <tr>
                         <th><input type="checkbox" id="bulk-delete-select-all"></th>
-                        <th><?php esc_html_e( 'Conversation ID', chatbot::TEXT_DOMAIN ); ?></th>
-                        <th><?php esc_html_e( 'User ID', chatbot::TEXT_DOMAIN ); ?></th>
-                        <th><?php esc_html_e( 'User IP', chatbot::TEXT_DOMAIN ); ?></th>
-                        <th><?php esc_html_e( 'Log Data', chatbot::TEXT_DOMAIN ); ?></th>
-                        <th><?php esc_html_e( 'Date', chatbot::TEXT_DOMAIN ); ?></th>
-                        <th><?php esc_html_e( 'Actions', chatbot::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'Conversation ID', self::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'User ID', self::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'User IP', self::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'Log Data', self::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'Date', self::TEXT_DOMAIN ); ?></th>
+                        <th><?php esc_html_e( 'Actions', self::TEXT_DOMAIN ); ?></th>
                     </tr>
                     </thead>
                     <tbody>
@@ -385,13 +385,13 @@ final class Chatbot {
                                 <td><pre><?php echo wp_kses_post( $log['chat_history'] ); ?></pre></td>
                                 <td><?php echo esc_html( $log['created_at'] ); ?></td>
                                 <td>
-                                    <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'delete_log', 'id' => $log['conversation_id'] ], admin_url( 'admin-post.php' ) ) ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log?', chatbot::TEXT_DOMAIN ); ?>');"><?php esc_html_e( 'Delete', chatbot::TEXT_DOMAIN ); ?></a>
+                                    <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'delete_log', 'id' => $log['conversation_id'] ], admin_url( 'admin-post.php' ) ) ); ?>" onclick="return confirm('<?php esc_attr_e( 'Are you sure you want to delete this log?', self::TEXT_DOMAIN ); ?>');"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></a>
                                 </td>
                             </tr>
 						<?php endforeach; ?>
 					<?php else : ?>
                         <tr>
-                            <td colspan="7"><?php esc_html_e( 'No logs found.', chatbot::TEXT_DOMAIN ); ?></td>
+                            <td colspan="7"><?php esc_html_e( 'No logs found.', self::TEXT_DOMAIN ); ?></td>
                         </tr>
 					<?php endif; ?>
                     </tbody>
@@ -399,10 +399,10 @@ final class Chatbot {
                 <div class="tablenav">
                     <div class="alignleft actions">
                         <select name="bulk_action">
-                            <option value="-1"><?php esc_html_e( 'Bulk Actions', chatbot::TEXT_DOMAIN ); ?></option>
-                            <option value="delete"><?php esc_html_e( 'Delete', chatbot::TEXT_DOMAIN ); ?></option>
+                            <option value="-1"><?php esc_html_e( 'Bulk Actions', self::TEXT_DOMAIN ); ?></option>
+                            <option value="delete"><?php esc_html_e( 'Delete', self::TEXT_DOMAIN ); ?></option>
                         </select>
-                        <input type="submit" value="<?php esc_attr_e( 'Apply', chatbot::TEXT_DOMAIN ); ?>" class="button action">
+                        <input type="submit" value="<?php esc_attr_e( 'Apply', self::TEXT_DOMAIN ); ?>" class="button action">
                     </div>
                     <div class="tablenav-pages">
 						<?php echo paginate_links( [
@@ -424,8 +424,8 @@ final class Chatbot {
 	public function add_export_logs_page(): void {
 		add_submenu_page(
 			'ollama-chatbot-logs',
-			esc_html__( 'Export Logs', chatbot::TEXT_DOMAIN ),
-			esc_html__( 'Export Logs', chatbot::TEXT_DOMAIN ),
+			esc_html__( 'Export Logs', self::TEXT_DOMAIN ),
+			esc_html__( 'Export Logs', self::TEXT_DOMAIN ),
 			'manage_options',
 			'ollama-chatbot-export-logs',
 			[ $this, 'export_logs_page' ]
@@ -441,11 +441,11 @@ final class Chatbot {
 		}
 		?>
         <div class="wrap">
-            <h1><?php esc_html_e( 'Export Chatbot Logs', chatbot::TEXT_DOMAIN ); ?></h1>
+            <h1><?php esc_html_e( 'Export Chatbot Logs', self::TEXT_DOMAIN ); ?></h1>
             <form method="post">
 				<?php wp_nonce_field( 'export_chatbot_logs', 'export_nonce' ); ?>
-                <p><?php esc_html_e( 'Click the button below to export all conversation logs as a CSV file. Use the filter "ollama_chatbot_export_format" to export as JSON.', chatbot::TEXT_DOMAIN ); ?></p>
-                <input type="submit" name="export_logs" class="button button-primary" value="<?php esc_attr_e( 'Export Logs', chatbot::TEXT_DOMAIN ); ?>">
+                <p><?php esc_html_e( 'Click the button below to export all conversation logs as a CSV file. Use the filter "ollama_chatbot_export_format" to export as JSON.', self::TEXT_DOMAIN ); ?></p>
+                <input type="submit" name="export_logs" class="button button-primary" value="<?php esc_attr_e( 'Export Logs', self::TEXT_DOMAIN ); ?>">
             </form>
         </div>
 		<?php
@@ -483,9 +483,7 @@ final class Chatbot {
 		exit;
 	}
 
-	/* ==========================================================================
-	   CONVERSATION HISTORY FUNCTIONS
-	========================================================================== */
+	/* ========================================================================== CONVERSATION HISTORY FUNCTIONS ========================================================================== */
 
 	/**
 	 * Retrieve the conversation ID.
@@ -531,10 +529,9 @@ final class Chatbot {
 			$history = array_slice( $history, -50 );
 		}
 		$key = 'ollama_conversation_history_' . $conversation_id;
-		set_transient( $key, $history, apply_filters( 'ollama_chatbot_history_expiration', chatbot::HISTORY_EXPIRATION ) );
+		set_transient( $key, $history, apply_filters( 'ollama_chatbot_history_expiration', self::HISTORY_EXPIRATION ) );
 		$this->log_conversation( $conversation_id, $history );
 	}
-
 
 	/**
 	 * Clear conversation history.
@@ -577,21 +574,19 @@ final class Chatbot {
 		$wpdb->delete( $table_name, [ 'conversation_id' => $conversation_id ] );
 	}
 
-	/* ==========================================================================
-	   CHAT REQUEST HANDLING
-	========================================================================== */
+	/* ========================================================================== CHAT REQUEST HANDLING ========================================================================== */
 
 	/**
 	 * Validate admin-post requests.
 	 */
 	private function validate_admin_request(): void {
 		if ( 'POST' !== $_SERVER['REQUEST_METHOD'] ) {
-			$this->send_json_response( [ 'message' => __( 'Invalid request method.', chatbot::TEXT_DOMAIN ) ], 405 );
+			$this->send_json_response( [ 'message' => __( 'Invalid request method.', self::TEXT_DOMAIN ) ], 405 );
 		}
 		$nonce = $_REQUEST['nonce'] ?? '';
 		$nonce = sanitize_text_field( wp_unslash( $nonce ) );
-		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, chatbot::NONCE_ACTION ) ) {
-			$this->send_json_response( [ 'message' => __( 'Nonce verification failed.', chatbot::TEXT_DOMAIN ) ], 403 );
+		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE_ACTION ) ) {
+			$this->send_json_response( [ 'message' => __( 'Nonce verification failed.', self::TEXT_DOMAIN ) ], 403 );
 		}
 	}
 
@@ -642,7 +637,7 @@ final class Chatbot {
 	 * @return int Limit.
 	 */
 	private function get_request_limit(): int {
-		return (int) apply_filters( 'ollama_chatbot_request_limit', chatbot::REQUEST_LIMIT );
+		return (int) apply_filters( 'ollama_chatbot_request_limit', self::REQUEST_LIMIT );
 	}
 
 	/**
@@ -674,16 +669,16 @@ final class Chatbot {
 			update_option( 'ollama_banned_ips', $banned_ips );
 			$error_message = apply_filters(
 				'ollama_chatbot_rate_limit_error',
-				__( 'Your IP has been temporarily blocked due to excessive requests.', chatbot::TEXT_DOMAIN ),
+				__( 'Your IP has been temporarily blocked due to excessive requests.', self::TEXT_DOMAIN ),
 				$ip
 			);
 			$this->send_admin_notification(
-				__( 'Chatbot Rate Limit Exceeded', chatbot::TEXT_DOMAIN ),
-				sprintf( __( 'The IP %s has been blocked due to too many requests.', chatbot::TEXT_DOMAIN ), $ip )
+				__( 'Chatbot Rate Limit Exceeded', self::TEXT_DOMAIN ),
+				sprintf( __( 'The IP %s has been blocked due to too many requests.', self::TEXT_DOMAIN ), $ip )
 			);
 			if ( get_option( 'ollama_debug_mode' ) ) {
 				$this->send_admin_notification(
-					__( 'Debug: Rate Limit Exceeded', chatbot::TEXT_DOMAIN ),
+					__( 'Debug: Rate Limit Exceeded', self::TEXT_DOMAIN ),
 					sprintf( 'Debug Info: IP %s reached limit at %s', $ip, current_time( 'mysql' ) )
 				);
 			}
@@ -704,10 +699,10 @@ final class Chatbot {
 		$api_key  = trim( (string) get_option( 'ollama_api_key', '' ) );
 		$model    = trim( (string) get_option( 'ollama_model', '' ) );
 		if ( empty( $prompt ) || empty( $endpoint ) || empty( $api_key ) || empty( $model ) ) {
-			return [ 'error' => __( 'One or more required API settings are missing.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'One or more required API settings are missing.', self::TEXT_DOMAIN ) ];
 		}
 		if ( ! filter_var( $endpoint, FILTER_VALIDATE_URL ) ) {
-			return [ 'error' => __( 'Invalid API endpoint URL.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'Invalid API endpoint URL.', self::TEXT_DOMAIN ) ];
 		}
 		return [
 			'prompt'   => $prompt,
@@ -738,7 +733,7 @@ final class Chatbot {
 		$user_message = apply_filters( 'ollama_chatbot_filter_user_input', $user_message );
 
 		if ( $this->is_ip_banned( $ip ) ) {
-			return [ 'error' => __( 'Your IP has been temporarily blocked due to excessive requests.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'Your IP has been temporarily blocked due to excessive requests.', self::TEXT_DOMAIN ) ];
 		}
 		$rate_limit = $this->check_rate_limit( $ip );
 		if ( ! empty( $rate_limit ) ) {
@@ -746,7 +741,7 @@ final class Chatbot {
 		}
 		$user_message = trim( $user_message );
 		if ( empty( $user_message ) ) {
-			return [ 'error' => __( 'User message is empty.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'User message is empty.', self::TEXT_DOMAIN ) ];
 		}
 		$conversation_id = $this->get_conversation_id();
 		$history = $this->get_conversation_history( $conversation_id );
@@ -755,8 +750,8 @@ final class Chatbot {
 		if ( strtolower( $user_message ) === 'reset' ) {
 			$this->clear_conversation_history( $conversation_id );
 			return [
-				'userMessage'      => '<div class="ollama-chat-message ollama-user"><strong>' . esc_html__( 'You', chatbot::TEXT_DOMAIN ) . ':</strong> ' . esc_html( $user_message ) . '</div>',
-				'assistantMessage' => '<div class="ollama-chat-message ollama-assistant"><strong>' . esc_html__( 'Assistant', chatbot::TEXT_DOMAIN ) . ':</strong> ' . esc_html__( 'Conversation reset.', chatbot::TEXT_DOMAIN ) . '</div>',
+				'userMessage'      => '<div class="ollama-chat-message ollama-user"><strong>' . esc_html__( 'You', self::TEXT_DOMAIN ) . ':</strong> ' . esc_html( $user_message ) . '</div>',
+				'assistantMessage' => '<div class="ollama-chat-message ollama-assistant"><strong>' . esc_html__( 'Assistant', self::TEXT_DOMAIN ) . ':</strong> ' . esc_html__( 'Conversation reset.', self::TEXT_DOMAIN ) . '</div>',
 				'conversation_id'  => $conversation_id,
 			];
 		}
@@ -781,8 +776,8 @@ final class Chatbot {
 		// Append user message.
 		$history[] = [ 'role' => 'user', 'content' => $user_message ];
 
-        // Caching.
-		$cache_enabled = apply_filters( 'ollama_chatbot_cache_enabled', chatbot::$cache_enabled );
+		// Caching.
+		$cache_enabled = apply_filters( 'ollama_chatbot_cache_enabled', self::$cache_enabled );
 		if ( $cache_enabled ) {
 			$cache_key = 'ollama_api_cache_' . $conversation_id . '_' . md5( serialize( $history ) );
 			$cached_response = wp_cache_get( $cache_key, 'ollama_chatbot' );
@@ -844,20 +839,19 @@ final class Chatbot {
 		if ( is_wp_error( $response ) ) {
 			$error_msg = sprintf( 'API error for IP %s: %s', $ip, $response->get_error_message() );
 			$this->debug_log( $error_msg );
-			// Optionally log error code or more context here.
-			return [ 'error' => sprintf( __( 'Error calling OpenWebUI API: %s', chatbot::TEXT_DOMAIN ), $response->get_error_message() ) ];
+			return [ 'error' => sprintf( __( 'Error calling OpenWebUI API: %s', self::TEXT_DOMAIN ), $response->get_error_message() ) ];
 		}
 		$status_code   = (int) wp_remote_retrieve_response_code( $response );
 		$response_body = wp_remote_retrieve_body( $response );
 		$this->debug_log( sprintf( 'API response for IP %s: %s', $ip, $response_body ) );
 		if ( $status_code !== 200 ) {
 			$this->debug_log( sprintf( 'API returned status code %d for IP %s', $status_code, $ip ) );
-			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', self::TEXT_DOMAIN ) ];
 		}
 		$response_data = json_decode( $response_body, true );
 		if ( json_last_error() !== JSON_ERROR_NONE ) {
 			$this->debug_log( 'JSON decode error: ' . json_last_error_msg() );
-			return [ 'error' => __( 'Invalid response from API.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'Invalid response from API.', self::TEXT_DOMAIN ) ];
 		}
 		do_action( 'ollama_chatbot_after_api_call', $response_data, $ip );
 		if ( isset( $response_data['choices'][0]['message']['content'] ) ) {
@@ -871,13 +865,13 @@ final class Chatbot {
 			$formatted_user_message = sprintf(
 				'<div class="ollama-chat-message ollama-user">%s<strong>%s:</strong> %s</div>',
 				$user_avatar ? '<img src="' . esc_url( $user_avatar ) . '" alt="User Avatar" class="ollama-avatar" /> ' : '',
-				esc_html__( 'You', chatbot::TEXT_DOMAIN ),
+				esc_html__( 'You', self::TEXT_DOMAIN ),
 				esc_html( $user_message )
 			);
 			$formatted_assistant_message = sprintf(
 				'<div class="ollama-chat-message ollama-assistant">%s<strong>%s:</strong> %s</div>',
 				$assistant_avatar ? '<img src="' . esc_url( $assistant_avatar ) . '" alt="Assistant Avatar" class="ollama-avatar" /> ' : '',
-				esc_html__( 'Assistant', chatbot::TEXT_DOMAIN ),
+				esc_html__( 'Assistant', self::TEXT_DOMAIN ),
 				wp_kses_post( $assistant_message )
 			);
 			$response_final = apply_filters( 'ollama_chatbot_response', [
@@ -887,8 +881,8 @@ final class Chatbot {
 				'apiResponseTime'  => $api_duration,
 			], $response_data );
 			if ( $cache_enabled ) {
-				set_transient( $cache_key, $response_final, chatbot::$cache_expiration );
-				wp_cache_set( $cache_key, $response_final, 'ollama_chatbot', chatbot::$cache_expiration );
+				set_transient( $cache_key, $response_final, self::$cache_expiration );
+				wp_cache_set( $cache_key, $response_final, 'ollama_chatbot', self::$cache_expiration );
 			}
 			do_action( 'ollama_chatbot_after_response', $conversation_id, $response_data );
 			do_action( 'ollama_chatbot_after_sentiment_analysis', $conversation_id, $response_final );
@@ -900,7 +894,7 @@ final class Chatbot {
 			return $response_final;
 		} else {
 			$this->debug_log( 'Unexpected API response: ' . print_r( $response_data, true ) );
-			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', chatbot::TEXT_DOMAIN ) ];
+			return [ 'error' => __( 'Unexpected response from OpenWebUI API.', self::TEXT_DOMAIN ) ];
 		}
 	}
 
@@ -957,10 +951,10 @@ final class Chatbot {
 	 */
 	public function rest_permission_check( \WP_REST_Request $request ) {
 		$nonce = $request->get_header( 'X-WP-Nonce' );
-		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, chatbot::NONCE_ACTION ) ) {
+		if ( empty( $nonce ) || ! wp_verify_nonce( $nonce, self::NONCE_ACTION ) ) {
 			return new \WP_Error(
 				'rest_forbidden',
-				__( 'Nonce verification failed.', chatbot::TEXT_DOMAIN ),
+				__( 'Nonce verification failed.', self::TEXT_DOMAIN ),
 				[ 'status' => 403 ]
 			);
 		}
@@ -983,9 +977,7 @@ final class Chatbot {
 		return new \WP_REST_Response( $result, 200 );
 	}
 
-	/* ==========================================================================
-	   EXTENDED REST API: Conversation Log Endpoints
-	========================================================================== */
+	/* ========================================================================== EXTENDED REST API: Conversation Log Endpoints ========================================================================== */
 
 	/**
 	 * Register REST API route for conversation log retrieval.
@@ -1007,7 +999,7 @@ final class Chatbot {
 	public function get_conversation_log_rest( \WP_REST_Request $request ): \WP_REST_Response {
 		$conversation_id = sanitize_text_field( $request->get_param( 'id' ) );
 		if ( empty( $conversation_id ) ) {
-			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID required.', chatbot::TEXT_DOMAIN ) ], 400 );
+			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID required.', self::TEXT_DOMAIN ) ], 400 );
 		}
 		global $wpdb;
 		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
@@ -1015,7 +1007,7 @@ final class Chatbot {
 		if ( $log ) {
 			return new \WP_REST_Response( $log, 200 );
 		}
-		return new \WP_REST_Response( [ 'message' => __( 'Log not found.', chatbot::TEXT_DOMAIN ) ], 404 );
+		return new \WP_REST_Response( [ 'message' => __( 'Log not found.', self::TEXT_DOMAIN ) ], 404 );
 	}
 
 	/**
@@ -1039,10 +1031,10 @@ final class Chatbot {
 		$conversation_id = sanitize_text_field( $request->get_param( 'conversation_id' ) );
 		$new_history = $request->get_param( 'history' );
 		if ( empty( $conversation_id ) || empty( $new_history ) ) {
-			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID and new history are required.', chatbot::TEXT_DOMAIN ) ], 400 );
+			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID and new history are required.', self::TEXT_DOMAIN ) ], 400 );
 		}
 		$this->update_conversation_history( $conversation_id, $new_history );
-		return new \WP_REST_Response( [ 'message' => __( 'Conversation log updated.', chatbot::TEXT_DOMAIN ) ], 200 );
+		return new \WP_REST_Response( [ 'message' => __( 'Conversation log updated.', self::TEXT_DOMAIN ) ], 200 );
 	}
 
 	/**
@@ -1067,15 +1059,13 @@ final class Chatbot {
 		$feedback = sanitize_text_field( $request->get_param( 'feedback' ) );
 		$rating = (int)$request->get_param( 'rating' );
 		if ( empty( $conversation_id ) ) {
-			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID is required.', chatbot::TEXT_DOMAIN ) ], 400 );
+			return new \WP_REST_Response( [ 'message' => __( 'Conversation ID is required.', self::TEXT_DOMAIN ) ], 400 );
 		}
 		do_action( 'ollama_chatbot_feedback', $conversation_id, $feedback, $rating );
-		return new \WP_REST_Response( [ 'message' => __( 'Feedback received.', chatbot::TEXT_DOMAIN ) ], 200 );
+		return new \WP_REST_Response( [ 'message' => __( 'Feedback received.', self::TEXT_DOMAIN ) ], 200 );
 	}
 
-	/* ==========================================================================
-	   SCHEDULED TASKS & DEBUGGING
-	========================================================================== */
+	/* ========================================================================== SCHEDULED TASKS & DEBUGGING ========================================================================== */
 
 	/**
 	 * Clear banned IPs.
@@ -1090,10 +1080,10 @@ final class Chatbot {
 	public function cleanup_conversation_logs(): void {
 		global $wpdb;
 		$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
-		$days = (int) apply_filters( 'ollama_chatbot_log_retention_days', chatbot::LOG_RETENTION_DAYS );
+		$days = (int) apply_filters( 'ollama_chatbot_log_retention_days', self::LOG_RETENTION_DAYS );
 		$cutoff = date( 'Y-m-d H:i:s', strtotime( "-{$days} days" ) );
 		$wpdb->query( $wpdb->prepare( "DELETE FROM {$table_name} WHERE created_at < %s", $cutoff ) );
-		$this->debug_log( sprintf( __( "Cleaned up logs older than %d days.", chatbot::TEXT_DOMAIN ), $days ) );
+		$this->debug_log( sprintf( __( "Cleaned up logs older than %d days.", self::TEXT_DOMAIN ), $days ) );
 	}
 
 	/**
@@ -1116,9 +1106,7 @@ final class Chatbot {
 		}
 	}
 
-	/* ==========================================================================
-	   WP-CLI COMMANDS, GUTENBERG BLOCK & WIDGET
-	========================================================================== */
+	/* ========================================================================== WP-CLI COMMANDS, GUTENBERG BLOCK & WIDGET ========================================================================== */
 
 	/**
 	 * Register WP-CLI commands.
@@ -1126,7 +1114,7 @@ final class Chatbot {
 	private function register_wp_cli_commands(): void {
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			\WP_CLI::add_command( 'ollama-chatbot', function ( $args, $assoc_args ) {
-				\WP_CLI::line( __( 'Listing recent conversation logs:', chatbot::TEXT_DOMAIN ) );
+				\WP_CLI::line( __( 'Listing recent conversation logs:', self::TEXT_DOMAIN ) );
 				global $wpdb;
 				$table_name = $wpdb->prefix . 'ollama_chatbot_logs';
 				$logs = $wpdb->get_results( "SELECT conversation_id, created_at FROM {$table_name} ORDER BY created_at DESC LIMIT 10", ARRAY_A );
@@ -1134,27 +1122,27 @@ final class Chatbot {
 					\WP_CLI::line( sprintf( "%s - %s", $log['conversation_id'], $log['created_at'] ) );
 				}
 			}, [
-				'shortdesc' => __( 'List recent chatbot conversation logs.', chatbot::TEXT_DOMAIN ),
+				'shortdesc' => __( 'List recent chatbot conversation logs.', self::TEXT_DOMAIN ),
 			] );
 			\WP_CLI::add_command( 'ollama-chatbot-flush-cache', function () {
 				delete_transient( 'ollama_api_cache_*' );
 				wp_cache_flush();
-				\WP_CLI::success( __( 'API cache flushed.', chatbot::TEXT_DOMAIN ) );
+				\WP_CLI::success( __( 'API cache flushed.', self::TEXT_DOMAIN ) );
 			}, [
-				'shortdesc' => __( 'Flush API response cache.', chatbot::TEXT_DOMAIN ),
+				'shortdesc' => __( 'Flush API response cache.', self::TEXT_DOMAIN ),
 			] );
 			\WP_CLI::add_command( 'ollama-chatbot-list-banned-ips', function () {
 				$banned_ips = get_option( 'ollama_banned_ips', [] );
 				if ( empty( $banned_ips ) ) {
-					\WP_CLI::success( __( 'No banned IPs.', chatbot::TEXT_DOMAIN ) );
+					\WP_CLI::success( __( 'No banned IPs.', self::TEXT_DOMAIN ) );
 				} else {
-					\WP_CLI::line( __( 'Banned IP Addresses:', chatbot::TEXT_DOMAIN ) );
+					\WP_CLI::line( __( 'Banned IP Addresses:', self::TEXT_DOMAIN ) );
 					foreach ( $banned_ips as $ip ) {
 						\WP_CLI::line( $ip );
 					}
 				}
 			}, [
-				'shortdesc' => __( 'List all banned IP addresses.', chatbot::TEXT_DOMAIN ),
+				'shortdesc' => __( 'List all banned IP addresses.', self::TEXT_DOMAIN ),
 			] );
 		}
 	}
@@ -1178,13 +1166,12 @@ final class Chatbot {
 	 */
 	private function register_widget(): void {
 		add_action( 'widgets_init', function () {
+			// Since the widget class is defined inline (see below), register it directly.
 			register_widget( \Ollama\Chatbot\Widget\Chatbot_Widget::class );
 		} );
 	}
 
-	/* ==========================================================================
-	   PLUGIN ACTIVATION, DEACTIVATION & UNINSTALL
-	========================================================================== */
+	/* ========================================================================== PLUGIN ACTIVATION, DEACTIVATION & UNINSTALL ========================================================================== */
 
 	/**
 	 * Plugin activation: Schedule events, create DB table, set defaults.
@@ -1207,7 +1194,7 @@ final class Chatbot {
 				add_option( $key, $value );
 			}
 		}
-		chatbot::create_conversation_table();
+		self::create_conversation_table();
 	}
 
 	/**
@@ -1218,9 +1205,6 @@ final class Chatbot {
 		wp_clear_scheduled_hook( 'ollama_cleanup_conversation_logs' );
 	}
 
-	/**
-	 * Plugin uninstall: Remove options and drop DB table.
-	 */
 	/**
 	 * Plugin uninstall: Remove options, transients, and drop DB table.
 	 */
@@ -1281,12 +1265,56 @@ final class Chatbot {
 	}
 }
 
-/* ==========================================================================
-   PLUGIN HOOKS & INITIALIZATION
-========================================================================== */
+/* ========================================================================== PLUGIN HOOKS & INITIALIZATION ========================================================================== */
 
 register_activation_hook( __FILE__, [ Chatbot::class, 'activate' ] );
 register_deactivation_hook( __FILE__, [ Chatbot::class, 'deactivate' ] );
 register_uninstall_hook( __FILE__, [ Chatbot::class, 'uninstall' ] );
 
 Chatbot::get_instance();
+
+/*
+ * Inline widget class definition.
+ */
+namespace Ollama\Chatbot\Widget;
+
+use WP_Widget;
+
+class Chatbot_Widget extends WP_Widget {
+
+	public function __construct() {
+		parent::__construct(
+			'ollama_chatbot_widget', // Base ID
+			__('Ollama Chatbot', 'ollama-chatbot'), // Name
+			['description' => __('A chatbot widget powered by OpenWebUI.', 'ollama-chatbot')]
+		);
+	}
+
+	/**
+	 * Output the content of the widget.
+	 */
+	public function widget( $args, $instance ) {
+		echo $args['before_widget'];
+		echo '<div id="ollama-chatbot-widget">';
+		// Render the chatbot via the shortcode.
+		if ( function_exists( 'do_shortcode' ) ) {
+			echo do_shortcode('[ollama_chatbot]');
+		}
+		echo '</div>';
+		echo $args['after_widget'];
+	}
+
+	/**
+	 * Widget form in admin.
+	 */
+	public function form( $instance ) {
+		echo '<p>' . esc_html__( 'No settings for this widget.', 'ollama-chatbot' ) . '</p>';
+	}
+
+	/**
+	 * Update widget options.
+	 */
+	public function update( $new_instance, $old_instance ) {
+		return $new_instance;
+	}
+}
